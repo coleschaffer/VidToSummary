@@ -97,6 +97,10 @@ window.loadHistorySession = function(idx) {
   }));
   summaries = session.summaries || [];
 
+  // Hide upload section and queue when loading previous session
+  document.querySelector('.upload-section').style.display = 'none';
+  queueSection.classList.remove('visible');
+
   renderResults();
   if (summaries.length > 0) {
     renderSummaries();
@@ -397,15 +401,30 @@ window.toggleSummary = (i) => document.querySelector(`.summary-item[data-index="
 // ==================== COPY & DOWNLOAD ====================
 function showSuccess(btn) {
   btn.classList.add('success');
-  setTimeout(() => btn.classList.remove('success'), 1500);
+  setTimeout(() => btn.classList.remove('success'), 2000);
 }
 
-window.copyText = function(index, type, event) {
+window.copyText = async function(index, type, event) {
   event.stopPropagation();
+  const btn = event.currentTarget;
   const item = type === 'transcript' ? transcriptions[index] : summaries[index];
   if (!item) return;
   const text = type === 'transcript' ? item.transcription : item.summary;
-  navigator.clipboard.writeText(text).then(() => showSuccess(event.currentTarget));
+  try {
+    await navigator.clipboard.writeText(text);
+    showSuccess(btn);
+  } catch (err) {
+    // Fallback for older browsers or permission issues
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    showSuccess(btn);
+  }
 };
 
 window.downloadText = function(index, type, event) {
