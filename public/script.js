@@ -30,11 +30,14 @@ dropzone.addEventListener('dragleave', () => {
 dropzone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropzone.classList.remove('dragover');
-  handleFiles(e.dataTransfer.files);
+  // Convert DataTransfer files to proper File objects
+  const files = Array.from(e.dataTransfer.files);
+  handleFiles(files);
 });
 
 fileInput.addEventListener('change', (e) => {
-  handleFiles(e.target.files);
+  const files = Array.from(e.target.files);
+  handleFiles(files);
   fileInput.value = '';
 });
 
@@ -79,7 +82,11 @@ function generateThumbnail(file) {
 
 async function handleFiles(files) {
   for (const file of files) {
-    if (file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+    // Check file type - also handle cases where type might be empty
+    const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|avi|mkv)$/i);
+    const isAudio = file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|m4a|aac|ogg)$/i);
+
+    if (isVideo || isAudio) {
       const thumbnail = await generateThumbnail(file);
       uploadQueue.push({
         id: Date.now() + Math.random(),
