@@ -2,9 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import { unlinkSync, mkdirSync, existsSync, createWriteStream } from 'fs';
+import { unlinkSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
@@ -463,8 +461,8 @@ app.post('/api/youtube/transcript', async (req, res) => {
   console.log(`[API] Fetching YouTube transcript for: ${url}`);
 
   try {
-    // Call Supadata API
-    const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true`;
+    // Call Supadata API (request English transcript by default)
+    const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=en`;
     const response = await fetch(supadataUrl, {
       method: 'GET',
       headers: {
@@ -564,9 +562,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
-// YouTube video download endpoint - uses yt-dlp
-const execFileAsync = promisify(execFile);
-
+// YouTube video download endpoint - uses Cobalt API and proxies through server
 app.get('/api/youtube/download/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
@@ -577,28 +573,81 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    // Get direct download URL using yt-dlp
-    const { stdout } = await execFileAsync('yt-dlp', [
-      '--get-url',
-      '--format', 'best[ext=mp4]/best',
-      '--no-warnings',
-      youtubeUrl
-    ], { timeout: 30000 });
+    console.log(`[API] Requesting video download for: ${videoId}`);
 
-    const downloadUrl = stdout.trim().split('\n')[0];
+    // Use Cobalt API to get download URL
+    const cobaltResponse = await fetch('https://api.cobalt.tools/', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: youtubeUrl,
+        videoQuality: '720',
+        filenameStyle: 'basic'
+      })
+    });
 
-    if (!downloadUrl) {
-      return res.status(404).json({ error: 'Could not get download URL' });
+    const data = await cobaltResponse.json();
+    console.log('[API] Cobalt response status:', data.status);
+
+    let downloadUrl;
+    if (data.status === 'redirect' || data.status === 'stream') {
+      downloadUrl = data.url;
+    } else if (data.status === 'picker' && data.picker?.length > 0) {
+      const videoOption = data.picker.find(p => p.type === 'video') || data.picker[0];
+      downloadUrl = videoOption.url;
+    } else if (data.status === 'error') {
+      console.error('[API] Cobalt error:', data.error);
+      return res.status(400).json({ error: data.error?.code || 'Download failed' });
+    } else {
+      return res.status(400).json({ error: 'Could not get download URL' });
     }
 
-    console.log('[API] yt-dlp got download URL for:', videoId);
+    console.log('[API] Proxying video download for:', videoId);
 
-    // Redirect to the direct download URL
-    res.redirect(downloadUrl);
+    // Fetch the video and proxy it through our server
+    const videoResponse = await fetch(downloadUrl);
+
+    if (!videoResponse.ok) {
+      throw new Error(`Failed to fetch video: ${videoResponse.status}`);
+    }
+
+    // Get filename from Cobalt or use videoId
+    const filename = data.filename || `${videoId}.mp4`;
+
+    // Set response headers
+    res.setHeader('Content-Type', videoResponse.headers.get('content-type') || 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (videoResponse.headers.get('content-length')) {
+      res.setHeader('Content-Length', videoResponse.headers.get('content-length'));
+    }
+
+    // Stream the video to the client
+    const reader = videoResponse.body.getReader();
+    const stream = new ReadableStream({
+      async start(controller) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+        controller.close();
+      }
+    });
+
+    // Convert Web ReadableStream to Node.js stream and pipe to response
+    const nodeStream = await import('stream');
+    const webStream = await import('stream/web');
+    const readable = nodeStream.Readable.fromWeb(stream);
+    readable.pipe(res);
 
   } catch (error) {
     console.error('[API] YouTube download error:', error);
-    res.status(500).json({ error: 'Failed to get video. The video may be unavailable or restricted.' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to download video. Please try again.' });
+    }
   }
 });
 
