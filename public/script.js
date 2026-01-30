@@ -16,6 +16,9 @@ const historyToggle = document.getElementById('historyToggle');
 const closeSidebar = document.getElementById('closeSidebar');
 const historyList = document.getElementById('historyList');
 const clearHistoryBtn = document.getElementById('clearHistory');
+const youtubeUrlInput = document.getElementById('youtubeUrl');
+const fetchYoutubeBtn = document.getElementById('fetchYoutubeBtn');
+const tabBtns = document.querySelectorAll('.tab-btn');
 
 let uploadQueue = [];
 let transcriptions = [];
@@ -140,6 +143,89 @@ clearHistoryBtn.addEventListener('click', () => {
 
 // Initialize history on load
 renderHistory();
+
+// ==================== TAB SWITCHING ====================
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tabName = btn.dataset.tab;
+    tabBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    document.getElementById(tabName + 'Tab').classList.add('active');
+  });
+});
+
+// ==================== YOUTUBE TRANSCRIPT ====================
+fetchYoutubeBtn.addEventListener('click', fetchYoutubeTranscript);
+youtubeUrlInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') fetchYoutubeTranscript();
+});
+
+async function fetchYoutubeTranscript() {
+  const url = youtubeUrlInput.value.trim();
+  if (!url) return;
+
+  // Validate YouTube URL
+  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
+  if (!youtubeRegex.test(url)) {
+    alert('Please enter a valid YouTube URL');
+    return;
+  }
+
+  fetchYoutubeBtn.disabled = true;
+  fetchYoutubeBtn.innerHTML = '<span class="spinner"></span> Fetching...';
+
+  try {
+    const response = await fetch('/api/youtube/transcript', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch transcript');
+    }
+
+    const data = await response.json();
+
+    // Extract video title from URL or use video ID
+    const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
+    const filename = `YouTube - ${videoId}`;
+
+    // Add to transcriptions
+    transcriptions.push({
+      filename,
+      transcription: data.transcript,
+      videoId: data.videoId,
+      source: 'youtube'
+    });
+
+    // Clear input
+    youtubeUrlInput.value = '';
+
+    // Show results
+    renderResults();
+
+    // Save to history
+    saveToHistory({
+      id: Date.now(),
+      date: new Date().toISOString(),
+      videos: transcriptions.map(t => ({
+        filename: t.filename,
+        transcription: t.transcription,
+        videoId: t.videoId
+      })),
+      summaries: []
+    });
+
+  } catch (error) {
+    alert('Error: ' + error.message);
+  } finally {
+    fetchYoutubeBtn.disabled = false;
+    fetchYoutubeBtn.innerHTML = '<span>Get Transcript</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
+  }
+}
 
 // ==================== FFMPEG ====================
 let ffmpeg = null;

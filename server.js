@@ -74,6 +74,9 @@ const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY });
 // Anthropic for summarization (Claude Opus 4.5)
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Supadata API for YouTube transcripts
+const SUPADATA_API_KEY = process.env.SUPADATA_API_KEY;
+
 // IMPORTANT: Enable SharedArrayBuffer for FFmpeg.wasm
 app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
@@ -434,6 +437,97 @@ app.post('/api/summarize', async (req, res) => {
   } catch (error) {
     console.error('Summarization error:', error);
     res.status(500).json({ error: 'Summarization failed: ' + error.message });
+  }
+});
+
+// YouTube transcript via Supadata API
+app.post('/api/youtube/transcript', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'YouTube URL required' });
+  }
+
+  if (!SUPADATA_API_KEY) {
+    return res.status(500).json({ error: 'Supadata API key not configured' });
+  }
+
+  // Validate YouTube URL
+  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
+  if (!youtubeRegex.test(url)) {
+    return res.status(400).json({ error: 'Invalid YouTube URL' });
+  }
+
+  console.log(`[API] Fetching YouTube transcript for: ${url}`);
+
+  try {
+    // Call Supadata API
+    const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true`;
+    const response = await fetch(supadataUrl, {
+      method: 'GET',
+      headers: {
+        'x-api-key': SUPADATA_API_KEY
+      }
+    });
+
+    // Handle async job (202 response)
+    if (response.status === 202) {
+      const { jobId } = await response.json();
+      console.log(`[API] Supadata job started: ${jobId}`);
+
+      // Poll for completion
+      let pollCount = 0;
+      const maxPolls = 120; // 2 minutes max
+      while (pollCount < maxPolls) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const pollResponse = await fetch(`https://api.supadata.ai/v1/transcript/${jobId}`, {
+          headers: { 'x-api-key': SUPADATA_API_KEY }
+        });
+        const pollData = await pollResponse.json();
+
+        if (pollData.status === 'completed') {
+          console.log(`[API] YouTube transcript complete: ${pollData.content?.length || 0} chars`);
+          return res.json({
+            transcript: pollData.content,
+            lang: pollData.lang,
+            source: 'youtube'
+          });
+        } else if (pollData.status === 'failed') {
+          throw new Error('Supadata transcription failed');
+        }
+        pollCount++;
+      }
+      throw new Error('Transcript polling timed out');
+    }
+
+    // Handle immediate response
+    if (!response.ok) {
+      const errorText = await response.text();
+      if (response.status === 206) {
+        throw new Error('No transcript available for this video');
+      } else if (response.status === 404) {
+        throw new Error('Video not found or is private');
+      } else if (response.status === 403) {
+        throw new Error('Video requires authentication or is restricted');
+      }
+      throw new Error(`Supadata API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log(`[API] YouTube transcript fetched: ${data.content?.length || 0} chars`);
+
+    // Extract video title from URL for filename
+    const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
+
+    res.json({
+      transcript: data.content,
+      lang: data.lang,
+      videoId: videoId,
+      source: 'youtube'
+    });
+  } catch (error) {
+    console.error('[API] YouTube transcript error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
