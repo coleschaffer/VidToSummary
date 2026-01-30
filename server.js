@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, unlinkSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -35,7 +36,11 @@ const upload = multer({
   }
 });
 
+// OpenAI for transcription (Whisper)
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Anthropic for summarization (Claude Opus 4.5)
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 app.use(express.static(join(__dirname, 'public')));
 app.use(express.json());
@@ -70,7 +75,7 @@ app.post('/api/transcribe', upload.single('video'), async (req, res) => {
   }
 });
 
-// Summarize transcription with custom prompt
+// Summarize transcription with custom prompt using Claude Opus 4.5
 app.post('/api/summarize', async (req, res) => {
   const { transcription, prompt } = req.body;
 
@@ -79,13 +84,11 @@ app.post('/api/summarize', async (req, res) => {
   }
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
+    const message = await anthropic.messages.create({
+      model: 'claude-opus-4-5-20250514',
+      max_tokens: 4096,
+      system: 'You are a helpful assistant that processes video transcriptions according to user instructions. Format your output clearly with markdown.',
       messages: [
-        {
-          role: 'system',
-          content: 'You are a helpful assistant that processes video transcriptions according to user instructions. Format your output clearly with markdown.'
-        },
         {
           role: 'user',
           content: `Here is a video transcription:\n\n${transcription}\n\n---\n\n${prompt}`
@@ -93,7 +96,7 @@ app.post('/api/summarize', async (req, res) => {
       ]
     });
 
-    res.json({ summary: completion.choices[0].message.content });
+    res.json({ summary: message.content[0].text });
   } catch (error) {
     console.error('Summarization error:', error);
     res.status(500).json({ error: 'Summarization failed: ' + error.message });
