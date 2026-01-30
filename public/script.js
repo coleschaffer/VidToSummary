@@ -1007,19 +1007,32 @@ window.downloadClips = async function() {
     updateStatus('Processing video...');
     await ffmpeg.writeFile(inputName, await fetchFile(videoBlob));
 
+    // Helper to convert time string to seconds
+    const timeToSeconds = (time) => {
+      const parts = time.split(':').map(Number);
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      return parts[0];
+    };
+
     // Step 4: Create each clip
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
       const outputName = `clip_${i + 1}.mp4`;
       updateStatus(`Creating clip ${i + 1}/${clips.length}...`);
 
-      console.log(`[Clips] Creating clip ${i + 1}: ${clip.start} to ${clip.end}`);
+      // Calculate duration (end - start)
+      const startSec = timeToSeconds(clip.start);
+      const endSec = timeToSeconds(clip.end);
+      const duration = endSec - startSec;
 
-      // FFmpeg command: -ss after -i so -to refers to absolute timestamp
+      console.log(`[Clips] Creating clip ${i + 1}: ${clip.start} to ${clip.end} (${duration}s)`);
+
+      // FFmpeg command: -ss to seek, -t for duration
       await ffmpeg.exec([
-        '-i', inputName,
         '-ss', clip.start,
-        '-to', clip.end,
+        '-i', inputName,
+        '-t', duration.toString(),
         '-c', 'copy',
         '-y', outputName
       ]);
