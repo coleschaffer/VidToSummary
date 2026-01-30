@@ -374,11 +374,38 @@ function renderResults() {
         </svg>
       </div>
       <div class="result-content">
+        <div class="result-actions">
+          <button class="btn btn-secondary btn-sm" onclick="downloadTranscript(${index}, event)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download .txt
+          </button>
+        </div>
         <div class="transcription-text">${item.transcription}</div>
       </div>
     </div>
   `).join('');
 }
+
+// Download transcript as text file
+window.downloadTranscript = function(index, event) {
+  event.stopPropagation();
+  const item = transcriptions[index];
+  if (!item) return;
+
+  const blob = new Blob([item.transcription], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = item.filename.replace(/\.[^/.]+$/, '') + '_transcript.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
 
 window.toggleResult = function(index) {
   const item = resultsList.querySelector(`[data-index="${index}"]`);

@@ -376,6 +376,10 @@ h3 {
   display: block;
 }
 
+.result-actions {
+  margin-bottom: 12px;
+}
+
 .transcription-text {
   font-size: 0.875rem;
   line-height: 1.7;

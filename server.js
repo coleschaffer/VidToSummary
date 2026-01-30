@@ -358,7 +358,7 @@ app.post('/api/summarize', async (req, res) => {
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-opus-4-5-20250514',
+      model: 'claude-opus-4-5-20251101',
       max_tokens: 4096,
       system: 'You are a helpful assistant that processes video transcriptions according to user instructions. Format your output clearly with markdown.',
       messages: [
