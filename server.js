@@ -4,7 +4,7 @@ import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { unlinkSync, mkdirSync, existsSync, writeFileSync, readFileSync, createReadStream } from 'fs';
+import { unlinkSync, mkdirSync, existsSync, writeFileSync, readFileSync, createReadStream, createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -804,8 +804,7 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
       throw new Error(`Failed to fetch video: ${videoResponse.status}`);
     }
 
-    const fileStream = createReadStream ? require('fs').createWriteStream(sourceFile) : null;
-    const writer = require('fs').createWriteStream(sourceFile);
+    const writer = createWriteStream(sourceFile);
     const nodeStream = await import('stream');
     const readable = nodeStream.Readable.fromWeb(videoResponse.body);
     await pipeline(readable, writer);
