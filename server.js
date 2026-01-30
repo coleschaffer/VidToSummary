@@ -18,8 +18,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '2323';
 
-// Initialize database
-initDb().catch(console.error);
+// Initialize database (optional - app works without it)
+initDb().then(() => {
+  console.log('Database connected successfully');
+}).catch(err => {
+  console.warn('Database not available:', err.message);
+  console.warn('App will work but data won\'t be persisted');
+});
 
 // Ensure uploads directory exists
 const uploadsDir = join(__dirname, 'uploads');
@@ -366,6 +371,12 @@ app.post('/api/summarize', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// Create server with extended timeout for large uploads
+const server = app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
+
+// Increase timeout to 10 minutes for large file uploads
+server.timeout = 600000; // 10 minutes
+server.keepAliveTimeout = 600000;
+server.headersTimeout = 600000;
