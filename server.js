@@ -2,7 +2,10 @@ import express from 'express';
 import multer from 'multer';
 import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
-import { unlinkSync, mkdirSync, existsSync } from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { unlinkSync, mkdirSync, existsSync, writeFileSync, readFileSync, createReadStream } from 'fs';
+import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
@@ -716,6 +719,182 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     console.error('[API] YouTube download error:', error);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to download video. Please try again.' });
+    }
+  }
+});
+
+// YouTube video clip endpoint - download and trim video segments
+const execAsync = promisify(exec);
+
+app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
+  const { videoId } = req.params;
+  const { clips } = req.body; // Array of { start: "0:30", end: "1:30" }
+
+  if (!videoId || videoId.length !== 11) {
+    return res.status(400).json({ error: 'Invalid video ID' });
+  }
+
+  if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    return res.status(400).json({ error: 'No clips specified' });
+  }
+
+  if (!RAPIDAPI_KEY) {
+    return res.status(500).json({ error: 'Video download service not configured' });
+  }
+
+  // Validate clip timestamps
+  const timeRegex = /^(\d+:)?(\d{1,2}):(\d{2})$|^(\d+)$/;
+  for (const clip of clips) {
+    if (!clip.start || !clip.end) {
+      return res.status(400).json({ error: 'Each clip must have start and end timestamps' });
+    }
+    if (!timeRegex.test(clip.start) || !timeRegex.test(clip.end)) {
+      return res.status(400).json({ error: 'Invalid timestamp format. Use MM:SS or HH:MM:SS' });
+    }
+  }
+
+  const tempDir = join(__dirname, 'temp');
+  if (!existsSync(tempDir)) {
+    mkdirSync(tempDir, { recursive: true });
+  }
+
+  const sessionId = Date.now().toString();
+  const sourceFile = join(tempDir, `${sessionId}_source.mp4`);
+  const clipFiles = [];
+
+  try {
+    console.log(`[API] Creating ${clips.length} clip(s) for video: ${videoId}`);
+
+    // Get video download URL from RapidAPI
+    const apiUrl = `https://youtube-media-downloader.p.rapidapi.com/v2/video/details?videoId=${videoId}`;
+    const apiResponse = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
+        'x-rapidapi-key': RAPIDAPI_KEY
+      }
+    });
+
+    if (!apiResponse.ok) {
+      throw new Error(`RapidAPI error: ${apiResponse.status}`);
+    }
+
+    const data = await apiResponse.json();
+    let downloadUrl;
+    let videoTitle = videoId;
+
+    if (data.videos?.items && data.videos.items.length > 0) {
+      const video = data.videos.items.find(v => v.quality === '720p' && v.extension === 'mp4')
+        || data.videos.items.find(v => v.extension === 'mp4')
+        || data.videos.items[0];
+      downloadUrl = video.url;
+      if (data.title) {
+        videoTitle = data.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 50);
+      }
+    }
+
+    if (!downloadUrl) {
+      return res.status(404).json({ error: 'No download URL available for this video' });
+    }
+
+    // Download the full video to temp file
+    console.log('[API] Downloading source video...');
+    const videoResponse = await fetch(downloadUrl);
+    if (!videoResponse.ok) {
+      throw new Error(`Failed to fetch video: ${videoResponse.status}`);
+    }
+
+    const fileStream = createReadStream ? require('fs').createWriteStream(sourceFile) : null;
+    const writer = require('fs').createWriteStream(sourceFile);
+    const nodeStream = await import('stream');
+    const readable = nodeStream.Readable.fromWeb(videoResponse.body);
+    await pipeline(readable, writer);
+
+    console.log('[API] Source video downloaded, creating clips...');
+
+    // Create each clip using FFmpeg
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      const clipFile = join(tempDir, `${sessionId}_clip_${i + 1}.mp4`);
+      clipFiles.push({ file: clipFile, start: clip.start, end: clip.end });
+
+      console.log(`[API] Creating clip ${i + 1}/${clips.length}: ${clip.start} - ${clip.end}`);
+
+      // FFmpeg command: -ss start -to end -c copy for fast trimming
+      const ffmpegCmd = `ffmpeg -y -i "${sourceFile}" -ss ${clip.start} -to ${clip.end} -c copy "${clipFile}"`;
+      await execAsync(ffmpegCmd);
+    }
+
+    console.log('[API] All clips created');
+
+    // If single clip, send it directly
+    if (clips.length === 1) {
+      const clipFile = clipFiles[0].file;
+      const safeStart = clips[0].start.replace(/:/g, '-');
+      const safeEnd = clips[0].end.replace(/:/g, '-');
+      const filename = `${videoTitle}_${safeStart}_to_${safeEnd}.mp4`;
+
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+      const clipStream = createReadStream(clipFile);
+      clipStream.pipe(res);
+
+      clipStream.on('end', () => {
+        // Cleanup temp files
+        try {
+          unlinkSync(sourceFile);
+          unlinkSync(clipFile);
+        } catch (e) {
+          console.log('[API] Cleanup error:', e.message);
+        }
+      });
+
+      return;
+    }
+
+    // Multiple clips: create a zip file
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+
+    for (let i = 0; i < clipFiles.length; i++) {
+      const { file, start, end } = clipFiles[i];
+      const safeStart = start.replace(/:/g, '-');
+      const safeEnd = end.replace(/:/g, '-');
+      const clipName = `${videoTitle}_clip${i + 1}_${safeStart}_to_${safeEnd}.mp4`;
+      const clipData = readFileSync(file);
+      zip.file(clipName, clipData);
+    }
+
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${videoTitle}_clips.zip"`);
+    res.send(zipBuffer);
+
+    // Cleanup temp files
+    try {
+      unlinkSync(sourceFile);
+      for (const { file } of clipFiles) {
+        unlinkSync(file);
+      }
+    } catch (e) {
+      console.log('[API] Cleanup error:', e.message);
+    }
+
+  } catch (error) {
+    console.error('[API] Clip creation error:', error);
+
+    // Cleanup on error
+    try {
+      if (existsSync(sourceFile)) unlinkSync(sourceFile);
+      for (const { file } of clipFiles) {
+        if (existsSync(file)) unlinkSync(file);
+      }
+    } catch (e) {}
+
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to create video clips. Please try again.' });
     }
   }
 });

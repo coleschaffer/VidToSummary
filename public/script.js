@@ -568,7 +568,7 @@ function renderResults() {
         <div class="result-actions">
           <button class="btn-icon" onclick="copyText(${i}, 'transcript', event)" title="Copy"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
           <button class="btn-icon" onclick="downloadText(${i}, 'transcript', event)" title="Download Transcript"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
-          ${item.source === 'youtube' && item.videoId ? `<button class="btn-icon" onclick="downloadVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
+          ${item.source === 'youtube' && item.videoId ? `<button class="btn-icon" onclick="downloadVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button><button class="btn-icon" onclick="openClipModal(${i}, event)" title="Create Clips"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
         </div>
         <div class="transcription-text">${item.transcription}</div>
       </div>
@@ -807,3 +807,214 @@ if (typeof marked === 'undefined') {
 
 // Pre-load FFmpeg
 setTimeout(() => loadFFmpeg().then(loaded => { if (loaded) console.log('[FFmpeg] Pre-loaded'); }), 1000);
+
+// ==================== CLIP MODAL ====================
+let clipModalVideoId = null;
+let clipModalVideoTitle = '';
+
+// Create modal HTML and append to body
+const clipModalHTML = `
+<div id="clipModal" class="modal-overlay" style="display: none;">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Create Video Clips</h3>
+      <button class="modal-close" onclick="closeClipModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-subtitle" id="clipModalTitle"></p>
+      <div id="clipRanges">
+        <div class="clip-range" data-index="0">
+          <div class="clip-inputs">
+            <div class="time-input-group">
+              <label>Start</label>
+              <input type="text" class="clip-start" placeholder="0:00" />
+            </div>
+            <span class="clip-separator">to</span>
+            <div class="time-input-group">
+              <label>End</label>
+              <input type="text" class="clip-end" placeholder="1:30" />
+            </div>
+            <button class="btn-icon clip-remove" onclick="removeClipRange(0)" title="Remove" style="visibility: hidden;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <button class="btn-secondary add-clip-btn" onclick="addClipRange()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Another Clip
+      </button>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeClipModal()">Cancel</button>
+      <button class="btn-primary" id="downloadClipsBtn" onclick="downloadClips()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Clips
+      </button>
+    </div>
+  </div>
+</div>
+`;
+document.body.insertAdjacentHTML('beforeend', clipModalHTML);
+
+window.openClipModal = function(index, event) {
+  event.stopPropagation();
+  const item = transcriptions[index];
+  if (!item || !item.videoId) return;
+
+  clipModalVideoId = item.videoId;
+  clipModalVideoTitle = item.filename;
+  document.getElementById('clipModalTitle').textContent = item.filename;
+
+  // Reset to single clip range
+  const clipRanges = document.getElementById('clipRanges');
+  clipRanges.innerHTML = `
+    <div class="clip-range" data-index="0">
+      <div class="clip-inputs">
+        <div class="time-input-group">
+          <label>Start</label>
+          <input type="text" class="clip-start" placeholder="0:00" />
+        </div>
+        <span class="clip-separator">to</span>
+        <div class="time-input-group">
+          <label>End</label>
+          <input type="text" class="clip-end" placeholder="1:30" />
+        </div>
+        <button class="btn-icon clip-remove" onclick="removeClipRange(0)" title="Remove" style="visibility: hidden;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('clipModal').style.display = 'flex';
+};
+
+window.closeClipModal = function() {
+  document.getElementById('clipModal').style.display = 'none';
+  clipModalVideoId = null;
+};
+
+window.addClipRange = function() {
+  const clipRanges = document.getElementById('clipRanges');
+  const index = clipRanges.children.length;
+
+  const newRange = document.createElement('div');
+  newRange.className = 'clip-range';
+  newRange.dataset.index = index;
+  newRange.innerHTML = `
+    <div class="clip-inputs">
+      <div class="time-input-group">
+        <label>Start</label>
+        <input type="text" class="clip-start" placeholder="0:00" />
+      </div>
+      <span class="clip-separator">to</span>
+      <div class="time-input-group">
+        <label>End</label>
+        <input type="text" class="clip-end" placeholder="1:30" />
+      </div>
+      <button class="btn-icon clip-remove" onclick="removeClipRange(${index})" title="Remove">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  `;
+  clipRanges.appendChild(newRange);
+
+  // Show remove button on first clip if we have multiple
+  if (clipRanges.children.length > 1) {
+    clipRanges.querySelector('.clip-range[data-index="0"] .clip-remove').style.visibility = 'visible';
+  }
+};
+
+window.removeClipRange = function(index) {
+  const clipRanges = document.getElementById('clipRanges');
+  const range = clipRanges.querySelector(`.clip-range[data-index="${index}"]`);
+  if (range && clipRanges.children.length > 1) {
+    range.remove();
+
+    // Re-index remaining ranges
+    Array.from(clipRanges.children).forEach((el, i) => {
+      el.dataset.index = i;
+      const removeBtn = el.querySelector('.clip-remove');
+      removeBtn.setAttribute('onclick', `removeClipRange(${i})`);
+    });
+
+    // Hide remove button if only one left
+    if (clipRanges.children.length === 1) {
+      clipRanges.querySelector('.clip-remove').style.visibility = 'hidden';
+    }
+  }
+};
+
+window.downloadClips = async function() {
+  if (!clipModalVideoId) return;
+
+  const clipRanges = document.getElementById('clipRanges');
+  const clips = [];
+
+  // Validate and collect clip data
+  const ranges = clipRanges.querySelectorAll('.clip-range');
+  for (const range of ranges) {
+    const start = range.querySelector('.clip-start').value.trim();
+    const end = range.querySelector('.clip-end').value.trim();
+
+    if (!start || !end) {
+      alert('Please fill in all start and end times');
+      return;
+    }
+
+    // Basic format validation
+    const timeRegex = /^(\d+:)?(\d{1,2}):(\d{2})$|^(\d+)$/;
+    if (!timeRegex.test(start) || !timeRegex.test(end)) {
+      alert('Invalid time format. Use MM:SS or HH:MM:SS');
+      return;
+    }
+
+    clips.push({ start, end });
+  }
+
+  const btn = document.getElementById('downloadClipsBtn');
+  const originalHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> Creating clips...';
+
+  try {
+    const response = await fetch(`/api/youtube/clip/${clipModalVideoId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clips })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create clips');
+    }
+
+    // Get the blob and trigger download
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+
+    // Determine filename from Content-Disposition header or use default
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = clips.length > 1 ? `${clipModalVideoTitle}_clips.zip` : `${clipModalVideoTitle}_clip.mp4`;
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/);
+      if (match) filename = match[1];
+    }
+
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    closeClipModal();
+  } catch (error) {
+    alert('Error: ' + error.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHTML;
+  }
+};
