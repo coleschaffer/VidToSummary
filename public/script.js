@@ -124,10 +124,11 @@ async function extractAudio(file, onProgress) {
       const data = await ffmpeg.readFile(outputName);
       console.log(`[FFmpeg] Read ${data.byteLength} bytes from output`);
 
-      const audioBlob = new Blob([data.buffer], { type: 'audio/mp3' });
+      // Use audio/mpeg (correct MIME type for MP3) - audio/mp3 is not standard
+      const audioBlob = new Blob([data.buffer], { type: 'audio/mpeg' });
       console.log(`[FFmpeg] Created blob: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
 
-      const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.mp3'), { type: 'audio/mp3' });
+      const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.mp3'), { type: 'audio/mpeg' });
       console.log(`[FFmpeg] Created file: ${audioFile.name}, ${audioFile.size} bytes, type: ${audioFile.type}`);
 
       // Cleanup

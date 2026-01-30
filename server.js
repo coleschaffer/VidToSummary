@@ -42,8 +42,10 @@ const upload = multer({
   storage,
   limits: { fileSize: 1024 * 1024 * 1024 }, // 1GB limit
   fileFilter: (req, file, cb) => {
-    const allowed = ['video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/x-m4a'];
-    cb(null, allowed.includes(file.mimetype));
+    const allowed = ['video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/mp4', 'audio/x-m4a'];
+    const isAllowed = allowed.includes(file.mimetype);
+    console.log(`[Multer] File: ${file.originalname}, MIME: ${file.mimetype}, Allowed: ${isAllowed}`);
+    cb(null, isAllowed);
   }
 });
 
