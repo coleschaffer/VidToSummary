@@ -99,7 +99,6 @@ function generateThumbnail(file) {
 
 async function handleFiles(files) {
   for (const file of files) {
-    // Skip 0-byte files
     if (file.size === 0) continue;
 
     const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|avi|mkv)$/i);
@@ -111,7 +110,9 @@ async function handleFiles(files) {
         id: Date.now() + Math.random(),
         file,
         thumbnail,
-        status: 'pending'
+        status: 'pending',
+        stage: null,
+        progress: 0
       });
     }
   }
@@ -123,6 +124,16 @@ function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function getStageLabel(stage) {
+  switch (stage) {
+    case 'uploading': return 'Uploading';
+    case 'queued': return 'Queued';
+    case 'transcribing': return 'Transcribing';
+    case 'done': return 'Done';
+    default: return 'Processing';
+  }
 }
 
 function renderQueue() {
@@ -150,6 +161,14 @@ function renderQueue() {
         <div class="queue-item-details">
           <span class="queue-item-name">${item.file.name}</span>
           <span class="queue-item-size">${formatSize(item.file.size)}</span>
+          ${item.status === 'processing' ? `
+            <div class="progress-container">
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: ${item.progress}%"></div>
+              </div>
+              <span class="progress-text">${getStageLabel(item.stage)}: ${item.progress}%</span>
+            </div>
+          ` : ''}
         </div>
       </div>
       <div class="queue-item-status">
@@ -176,46 +195,118 @@ window.removeFromQueue = function(id) {
   renderQueue();
 };
 
-// Transcribe a single video (returns promise, doesn't render during)
-async function transcribeVideo(item) {
-  const startTime = Date.now();
-  console.log(`[${item.file.name}] Starting upload... (${formatSize(item.file.size)})`);
-
-  try {
+// Upload file with progress tracking using XMLHttpRequest
+function uploadWithProgress(item) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append('video', item.file);
 
-    console.log(`[${item.file.name}] Sending to /api/transcribe...`);
-    const response = await fetch('/api/transcribe', {
-      method: 'POST',
-      body: formData
-    });
+    // Track upload progress
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        item.stage = 'uploading';
+        item.progress = Math.round((e.loaded / e.total) * 100);
+        renderQueue();
+      }
+    };
 
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[${item.file.name}] Response received after ${elapsed}s, status: ${response.status}`);
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch (e) {
+          reject(new Error('Invalid response'));
+        }
+      } else {
+        try {
+          const error = JSON.parse(xhr.responseText);
+          reject(new Error(error.error || 'Upload failed'));
+        } catch (e) {
+          reject(new Error('Upload failed'));
+        }
+      }
+    };
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error(`[${item.file.name}] Error response:`, errorData);
-      throw new Error(errorData.error || 'Transcription failed');
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.open('POST', '/api/transcribe/start');
+    xhr.send(formData);
+  });
+}
+
+// Poll for transcription status
+async function pollTranscriptionStatus(item, jobId) {
+  const pollInterval = 2000; // 2 seconds
+  const maxPolls = 600; // 20 minutes max
+  let polls = 0;
+
+  while (polls < maxPolls) {
+    try {
+      const response = await fetch(`/api/transcribe/status/${jobId}`);
+      const data = await response.json();
+
+      item.stage = data.stage;
+      item.progress = data.progress;
+      renderQueue();
+
+      console.log(`[${item.file.name}] ${data.stage}: ${data.progress}%`);
+
+      if (data.status === 'completed') {
+        return data;
+      } else if (data.status === 'error') {
+        throw new Error(data.error || 'Transcription failed');
+      }
+
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      polls++;
+    } catch (error) {
+      throw error;
     }
+  }
 
-    const data = await response.json();
-    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[${item.file.name}] ✓ Transcription complete! Total time: ${totalTime}s`);
+  throw new Error('Transcription timed out');
+}
+
+// Transcribe a single video with progress
+async function transcribeVideo(item) {
+  const startTime = Date.now();
+  console.log(`[${item.file.name}] Starting transcription... (${formatSize(item.file.size)})`);
+
+  try {
+    // Step 1: Upload file
+    item.stage = 'uploading';
+    item.progress = 0;
+    renderQueue();
+
+    console.log(`[${item.file.name}] Uploading...`);
+    const uploadResult = await uploadWithProgress(item);
+    console.log(`[${item.file.name}] Upload complete, job ID: ${uploadResult.jobId}`);
+
+    // Step 2: Poll for transcription progress
+    item.stage = 'queued';
+    item.progress = 0;
+    renderQueue();
+
+    const result = await pollTranscriptionStatus(item, uploadResult.jobId);
+
+    // Success!
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[${item.file.name}] ✓ Complete in ${elapsed}s`);
 
     item.status = 'done';
-    item.videoId = data.videoId;
+    item.videoId = result.videoId;
     transcriptions.push({
-      filename: data.filename,
-      transcription: data.transcription,
-      videoId: data.videoId
+      filename: result.filename,
+      transcription: result.transcription,
+      videoId: result.videoId
     });
+
     return { success: true, item };
   } catch (error) {
+    console.error(`[${item.file.name}] ✗ Failed:`, error.message);
     item.status = 'error';
     item.error = error.message;
-    console.error(`[${item.file.name}] ✗ Transcription failed:`, error);
     return { success: false, item, error };
   }
 }
@@ -234,22 +325,24 @@ transcribeAllBtn.addEventListener('click', async () => {
   transcribeAllBtn.disabled = true;
   transcribeAllBtn.innerHTML = '<span class="spinner"></span> Transcribing...';
 
-  // Set ALL items to processing FIRST, then render once
+  // Set ALL items to processing FIRST
   pendingItems.forEach(item => {
     item.status = 'processing';
+    item.stage = 'uploading';
+    item.progress = 0;
   });
   renderQueue();
 
   // Start ALL transcriptions in parallel
   const promises = pendingItems.map(item => transcribeVideo(item));
 
-  // As each completes, update the UI
-  for (const promise of promises) {
+  // Update UI as each completes
+  promises.forEach(promise => {
     promise.then(() => {
       renderQueue();
       renderResults();
     });
-  }
+  });
 
   // Wait for all to complete
   await Promise.all(promises);
@@ -312,27 +405,19 @@ runPromptBtn.addEventListener('click', async () => {
   runPromptBtn.innerHTML = '<span class="spinner"></span> Processing...';
 
   try {
-    // Combine all transcriptions
     const combinedTranscription = transcriptions
       .map(t => `## ${t.filename}\n\n${t.transcription}`)
       .join('\n\n---\n\n');
 
-    // Get video IDs for database linking
     const videoIds = transcriptions.map(t => t.videoId).filter(Boolean);
 
     const response = await fetch('/api/summarize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transcription: combinedTranscription,
-        prompt,
-        videoIds
-      })
+      body: JSON.stringify({ transcription: combinedTranscription, prompt, videoIds })
     });
 
-    if (!response.ok) {
-      throw new Error('Summarization failed');
-    }
+    if (!response.ok) throw new Error('Summarization failed');
 
     const data = await response.json();
     summaryContent.innerHTML = marked.parse(data.summary);
@@ -354,23 +439,16 @@ runPromptBtn.addEventListener('click', async () => {
   }
 });
 
-// Simple markdown parser (fallback if marked.js not loaded)
+// Markdown parser fallback
 if (typeof marked === 'undefined') {
   window.marked = {
-    parse: (text) => {
-      return text
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
-        .replace(/\*(.*)\*/gim, '<em>$1</em>')
-        .replace(/^\- (.*$)/gim, '<li>$1</li>')
-        .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/^(.*)$/gim, (match) => {
-          if (match.startsWith('<')) return match;
-          return match;
-        });
-    }
+    parse: (text) => text
+      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+      .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+      .replace(/\*(.*)\*/gim, '<em>$1</em>')
+      .replace(/^\- (.*$)/gim, '<li>$1</li>')
+      .replace(/\n\n/g, '</p><p>')
   };
 }

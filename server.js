@@ -142,70 +142,187 @@ app.get('/admin', (req, res) => {
 // Track video IDs for current session (for linking summaries)
 let currentSessionVideoIds = [];
 
-// Transcribe uploaded video using AssemblyAI
-app.post('/api/transcribe', upload.single('video'), async (req, res) => {
-  const startTime = Date.now();
+// Track active transcriptions for progress polling
+const activeTranscriptions = new Map();
 
+// Start transcription - returns job ID for progress polling
+app.post('/api/transcribe/start', upload.single('video'), async (req, res) => {
   if (!req.file) {
-    console.log('[API] No file in request');
     return res.status(400).json({ error: 'No video file uploaded' });
   }
 
   const filename = req.file.originalname;
   const fileSize = (req.file.size / (1024 * 1024)).toFixed(1);
-  console.log(`\n[API] ========== Received: ${filename} (${fileSize}MB) ==========`);
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  console.log(`\n[API] ========== Starting job ${jobId}: ${filename} (${fileSize}MB) ==========`);
 
   try {
     // Save video to database
-    console.log(`[API] [${filename}] Saving to database...`);
-    const videoId = await saveVideo(
-      req.file.originalname,
-      req.file.size,
-      req.file.mimetype
-    );
+    const videoId = await saveVideo(req.file.originalname, req.file.size, req.file.mimetype);
     currentSessionVideoIds.push(videoId);
-    console.log(`[API] [${filename}] Saved to DB with ID: ${videoId}`);
+    console.log(`[API] [${jobId}] Saved to DB with videoId: ${videoId}`);
 
-    // Upload and transcribe with AssemblyAI
-    console.log(`[API] [${filename}] Starting AssemblyAI transcription...`);
-    console.log(`[API] [${filename}] File path: ${req.file.path}`);
-    const transcribeStart = Date.now();
-
-    const transcript = await assemblyai.transcripts.transcribe({
-      audio: req.file.path
+    // Initialize job tracking
+    activeTranscriptions.set(jobId, {
+      filename,
+      videoId,
+      filePath: req.file.path,
+      stage: 'uploading',
+      progress: 0,
+      status: 'processing',
+      startTime: Date.now()
     });
 
-    const transcribeTime = ((Date.now() - transcribeStart) / 1000).toFixed(1);
-    console.log(`[API] [${filename}] AssemblyAI returned after ${transcribeTime}s`);
-    console.log(`[API] [${filename}] Status: ${transcript.status}`);
-    if (transcript.id) console.log(`[API] [${filename}] Transcript ID: ${transcript.id}`);
+    // Start async transcription process
+    processTranscription(jobId);
 
-    // Clean up uploaded file
-    unlinkSync(req.file.path);
-    console.log(`[API] [${filename}] Cleaned up temp file`);
+    res.json({ jobId, videoId, filename });
+  } catch (error) {
+    console.error(`[API] [${jobId}] Failed to start:`, error);
+    if (req.file?.path) {
+      try { unlinkSync(req.file.path); } catch {}
+    }
+    res.status(500).json({ error: 'Failed to start transcription: ' + error.message });
+  }
+});
 
-    if (transcript.status === 'error') {
-      console.error(`[API] [${filename}] AssemblyAI error:`, transcript.error);
-      throw new Error(transcript.error || 'Transcription failed');
+// Async transcription processing
+async function processTranscription(jobId) {
+  const job = activeTranscriptions.get(jobId);
+  if (!job) return;
+
+  try {
+    // Stage 1: Upload to AssemblyAI
+    job.stage = 'uploading';
+    job.progress = 0;
+    console.log(`[API] [${jobId}] Uploading to AssemblyAI...`);
+
+    const uploadUrl = await assemblyai.files.upload(job.filePath);
+    console.log(`[API] [${jobId}] Upload complete, URL: ${uploadUrl.substring(0, 50)}...`);
+
+    // Clean up local file after upload
+    try { unlinkSync(job.filePath); } catch {}
+
+    // Stage 2: Submit for transcription
+    job.stage = 'queued';
+    job.progress = 0;
+    console.log(`[API] [${jobId}] Submitting transcription request...`);
+
+    const transcriptRequest = await assemblyai.transcripts.submit({ audio_url: uploadUrl });
+    job.transcriptId = transcriptRequest.id;
+    console.log(`[API] [${jobId}] Transcript ID: ${transcriptRequest.id}`);
+
+    // Stage 3: Poll for completion
+    job.stage = 'transcribing';
+    let transcript;
+    let pollCount = 0;
+
+    while (true) {
+      transcript = await assemblyai.transcripts.get(job.transcriptId);
+      pollCount++;
+
+      if (transcript.status === 'completed') {
+        job.progress = 100;
+        console.log(`[API] [${jobId}] Transcription complete after ${pollCount} polls`);
+        break;
+      } else if (transcript.status === 'error') {
+        throw new Error(transcript.error || 'Transcription failed');
+      } else {
+        // Processing - estimate progress based on status
+        if (transcript.status === 'queued') {
+          job.stage = 'queued';
+          job.progress = 0;
+        } else if (transcript.status === 'processing') {
+          job.stage = 'transcribing';
+          // AssemblyAI doesn't give percent, so estimate based on time
+          const elapsed = (Date.now() - job.startTime) / 1000;
+          // Rough estimate: assume 1 minute per 10MB of video
+          const estimatedTotal = (job.progress || 30) + Math.min(elapsed / 3, 95);
+          job.progress = Math.min(Math.round(estimatedTotal), 95);
+        }
+        console.log(`[API] [${jobId}] Status: ${transcript.status}, progress: ${job.progress}%`);
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Poll every 3 seconds
+      }
     }
 
     // Save transcript to database
-    console.log(`[API] [${filename}] Saving transcript to DB (${transcript.text?.length || 0} chars)...`);
+    await saveTranscript(job.videoId, transcript.text);
+
+    // Mark complete
+    job.status = 'completed';
+    job.stage = 'done';
+    job.progress = 100;
+    job.transcription = transcript.text;
+
+    const totalTime = ((Date.now() - job.startTime) / 1000).toFixed(1);
+    console.log(`[API] [${jobId}] ✓ COMPLETE! Total time: ${totalTime}s, ${transcript.text?.length || 0} chars`);
+
+  } catch (error) {
+    console.error(`[API] [${jobId}] ✗ FAILED:`, error.message);
+    job.status = 'error';
+    job.error = error.message;
+    // Clean up file if still exists
+    if (job.filePath) {
+      try { unlinkSync(job.filePath); } catch {}
+    }
+  }
+}
+
+// Poll transcription status
+app.get('/api/transcribe/status/:jobId', (req, res) => {
+  const job = activeTranscriptions.get(req.params.jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  const response = {
+    jobId: req.params.jobId,
+    filename: job.filename,
+    videoId: job.videoId,
+    status: job.status,
+    stage: job.stage,
+    progress: job.progress
+  };
+
+  if (job.status === 'completed') {
+    response.transcription = job.transcription;
+    // Clean up job after client retrieves result
+    setTimeout(() => activeTranscriptions.delete(req.params.jobId), 60000);
+  } else if (job.status === 'error') {
+    response.error = job.error;
+    setTimeout(() => activeTranscriptions.delete(req.params.jobId), 60000);
+  }
+
+  res.json(response);
+});
+
+// Legacy endpoint for backwards compatibility
+app.post('/api/transcribe', upload.single('video'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No video file uploaded' });
+  }
+
+  const filename = req.file.originalname;
+  console.log(`[API] Legacy transcribe: ${filename}`);
+
+  try {
+    const videoId = await saveVideo(req.file.originalname, req.file.size, req.file.mimetype);
+    currentSessionVideoIds.push(videoId);
+
+    const transcript = await assemblyai.transcripts.transcribe({ audio: req.file.path });
+    unlinkSync(req.file.path);
+
+    if (transcript.status === 'error') {
+      throw new Error(transcript.error || 'Transcription failed');
+    }
+
     await saveTranscript(videoId, transcript.text);
 
-    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[API] [${filename}] ✓ COMPLETE! Total time: ${totalTime}s`);
-
-    res.json({
-      filename: req.file.originalname,
-      transcription: transcript.text,
-      videoId
-    });
+    res.json({ filename, transcription: transcript.text, videoId });
   } catch (error) {
-    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.error(`[API] [${filename}] ✗ FAILED after ${totalTime}s:`, error.message);
-    console.error(`[API] [${filename}] Full error:`, error);
-    // Clean up on error
+    console.error('Transcription error:', error);
     if (req.file?.path) {
       try { unlinkSync(req.file.path); } catch {}
     }
