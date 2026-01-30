@@ -120,9 +120,15 @@ async function extractAudio(file, onProgress) {
       ]);
 
       // Read output
+      console.log(`[FFmpeg] Reading output file: ${outputName}`);
       const data = await ffmpeg.readFile(outputName);
+      console.log(`[FFmpeg] Read ${data.byteLength} bytes from output`);
+
       const audioBlob = new Blob([data.buffer], { type: 'audio/mp3' });
+      console.log(`[FFmpeg] Created blob: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+
       const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.mp3'), { type: 'audio/mp3' });
+      console.log(`[FFmpeg] Created file: ${audioFile.name}, ${audioFile.size} bytes, type: ${audioFile.type}`);
 
       // Cleanup
       try { await ffmpeg.deleteFile(inputName); } catch {}
@@ -346,7 +352,12 @@ function uploadWithProgress(item) {
     const formData = new FormData();
     // Use extracted audio if available, otherwise original file
     const fileToUpload = item.fileToUpload || item.file;
-    formData.append('video', fileToUpload, item.file.name);
+
+    console.log(`[Upload] Preparing upload for: ${item.file.name}`);
+    console.log(`[Upload] File to upload: name=${fileToUpload.name}, size=${fileToUpload.size}, type=${fileToUpload.type}`);
+    console.log(`[Upload] Is File: ${fileToUpload instanceof File}, Is Blob: ${fileToUpload instanceof Blob}`);
+
+    formData.append('video', fileToUpload, fileToUpload.name);
 
     // Track upload progress
     xhr.upload.onprogress = (e) => {
@@ -358,6 +369,9 @@ function uploadWithProgress(item) {
     };
 
     xhr.onload = () => {
+      console.log(`[Upload] Response status: ${xhr.status}`);
+      console.log(`[Upload] Response: ${xhr.responseText.substring(0, 500)}`);
+
       if (xhr.status === 200) {
         try {
           const data = JSON.parse(xhr.responseText);
@@ -370,12 +384,15 @@ function uploadWithProgress(item) {
           const error = JSON.parse(xhr.responseText);
           reject(new Error(error.error || 'Upload failed'));
         } catch (e) {
-          reject(new Error('Upload failed'));
+          reject(new Error(`Upload failed with status ${xhr.status}`));
         }
       }
     };
 
-    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.onerror = () => {
+      console.error(`[Upload] Network error - readyState: ${xhr.readyState}`);
+      reject(new Error('Network error'));
+    };
     xhr.open('POST', '/api/transcribe/start');
     xhr.send(formData);
   });
