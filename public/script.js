@@ -1015,10 +1015,10 @@ window.downloadClips = async function() {
 
       console.log(`[Clips] Creating clip ${i + 1}: ${clip.start} to ${clip.end}`);
 
-      // FFmpeg command: -ss start -to end -c copy for fast trimming
+      // FFmpeg command: -ss after -i so -to refers to absolute timestamp
       await ffmpeg.exec([
-        '-ss', clip.start,
         '-i', inputName,
+        '-ss', clip.start,
         '-to', clip.end,
         '-c', 'copy',
         '-y', outputName
