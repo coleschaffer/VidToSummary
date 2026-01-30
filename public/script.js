@@ -60,8 +60,8 @@ function renderHistory() {
     const date = new Date(session.date).toLocaleDateString('en-US', {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
     });
-    const videoNames = session.videos.map(v => v.filename).join(', ');
-    const truncated = videoNames.length > 40 ? videoNames.substring(0, 40) + '...' : videoNames;
+    const displayName = session.name || session.videos.map(v => v.filename).join(', ');
+    const truncated = displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName;
 
     return `
       <div class="history-item">
@@ -70,9 +70,9 @@ function renderHistory() {
           <div class="history-item-videos">${truncated}</div>
         </div>
         <div class="history-item-actions">
-          <button class="btn-icon" onclick="loadHistorySession(${idx}); event.stopPropagation();" title="Load">
+          <button class="btn-icon" onclick="renameHistorySession(${idx}); event.stopPropagation();" title="Rename">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
             </svg>
           </button>
           <button class="btn-icon" onclick="deleteHistorySession(${idx}); event.stopPropagation();" title="Delete">
@@ -107,10 +107,24 @@ window.loadHistorySession = function(idx) {
 };
 
 window.deleteHistorySession = function(idx) {
+  if (!confirm('Delete this session from history?')) return;
   const history = getHistory();
   history.splice(idx, 1);
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
+};
+
+window.renameHistorySession = function(idx) {
+  const history = getHistory();
+  const session = history[idx];
+  if (!session) return;
+  const currentName = session.name || session.videos.map(v => v.filename).join(', ');
+  const newName = prompt('Rename session:', currentName);
+  if (newName && newName.trim()) {
+    session.name = newName.trim();
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    renderHistory();
+  }
 };
 
 // Sidebar toggle
