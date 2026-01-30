@@ -1,8 +1,8 @@
 import express from 'express';
 import multer from 'multer';
-import OpenAI from 'openai';
+import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
-import { createReadStream, unlinkSync, mkdirSync, existsSync } from 'fs';
+import { unlinkSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
@@ -29,15 +29,15 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit (OpenAI Whisper max)
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
   fileFilter: (req, file, cb) => {
-    const allowed = ['video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/wav', 'audio/mp4'];
+    const allowed = ['video/mp4', 'video/webm', 'video/quicktime', 'audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/x-m4a'];
     cb(null, allowed.includes(file.mimetype));
   }
 });
 
-// OpenAI for transcription (Whisper)
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// AssemblyAI for transcription
+const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY });
 
 // Anthropic for summarization (Claude Opus 4.5)
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -45,25 +45,29 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 app.use(express.static(join(__dirname, 'public')));
 app.use(express.json());
 
-// Transcribe uploaded video
+// Transcribe uploaded video using AssemblyAI
 app.post('/api/transcribe', upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No video file uploaded' });
   }
 
   try {
-    const transcription = await openai.audio.transcriptions.create({
-      file: createReadStream(req.file.path),
-      model: 'whisper-1',
-      response_format: 'text'
+    console.log(`Transcribing: ${req.file.originalname}`);
+
+    const transcript = await assemblyai.transcripts.transcribe({
+      audio: req.file.path
     });
 
     // Clean up uploaded file
     unlinkSync(req.file.path);
 
+    if (transcript.status === 'error') {
+      throw new Error(transcript.error || 'Transcription failed');
+    }
+
     res.json({
       filename: req.file.originalname,
-      transcription
+      transcription: transcript.text
     });
   } catch (error) {
     console.error('Transcription error:', error);

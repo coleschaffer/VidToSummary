@@ -38,12 +38,53 @@ fileInput.addEventListener('change', (e) => {
   fileInput.value = '';
 });
 
-function handleFiles(files) {
+// Generate thumbnail from video file
+function generateThumbnail(file) {
+  return new Promise((resolve) => {
+    if (file.type.startsWith('audio/')) {
+      // Return null for audio files (will show audio icon instead)
+      resolve(null);
+      return;
+    }
+
+    const video = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+
+    video.onloadeddata = () => {
+      // Seek to 1 second or 10% of duration, whichever is smaller
+      video.currentTime = Math.min(1, video.duration * 0.1);
+    };
+
+    video.onseeked = () => {
+      canvas.width = 80;
+      canvas.height = 45;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
+      URL.revokeObjectURL(video.src);
+      resolve(thumbnail);
+    };
+
+    video.onerror = () => {
+      resolve(null);
+    };
+
+    video.src = URL.createObjectURL(file);
+  });
+}
+
+async function handleFiles(files) {
   for (const file of files) {
     if (file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+      const thumbnail = await generateThumbnail(file);
       uploadQueue.push({
         id: Date.now() + Math.random(),
         file,
+        thumbnail,
         status: 'pending'
       });
     }
@@ -57,6 +98,12 @@ function formatSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+function formatDuration(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 function renderQueue() {
   if (uploadQueue.length === 0) {
     queueSection.classList.remove('visible');
@@ -67,8 +114,22 @@ function renderQueue() {
   queueList.innerHTML = uploadQueue.map(item => `
     <div class="queue-item" data-id="${item.id}">
       <div class="queue-item-info">
-        <span class="queue-item-name">${item.file.name}</span>
-        <span class="queue-item-size">${formatSize(item.file.size)}</span>
+        <div class="queue-item-thumbnail">
+          ${item.thumbnail
+            ? `<img src="${item.thumbnail}" alt="thumbnail">`
+            : `<div class="audio-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 18V5l12-2v13"/>
+                  <circle cx="6" cy="18" r="3"/>
+                  <circle cx="18" cy="16" r="3"/>
+                </svg>
+              </div>`
+          }
+        </div>
+        <div class="queue-item-details">
+          <span class="queue-item-name">${item.file.name}</span>
+          <span class="queue-item-size">${formatSize(item.file.size)}</span>
+        </div>
       </div>
       <div class="queue-item-status">
         <span class="status-badge ${item.status}">${item.status}</span>
@@ -94,41 +155,59 @@ window.removeFromQueue = function(id) {
   renderQueue();
 };
 
-// Transcription
+// Transcribe a single video
+async function transcribeVideo(item) {
+  item.status = 'processing';
+  renderQueue();
+
+  try {
+    const formData = new FormData();
+    formData.append('video', item.file);
+
+    const response = await fetch('/api/transcribe', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Transcription failed');
+    }
+
+    const data = await response.json();
+    item.status = 'done';
+    transcriptions.push({
+      filename: data.filename,
+      transcription: data.transcription
+    });
+    renderResults();
+  } catch (error) {
+    item.status = 'error';
+    console.error('Error:', error);
+  }
+
+  renderQueue();
+}
+
+// Transcribe all videos in parallel
 transcribeAllBtn.addEventListener('click', async () => {
   const pendingItems = uploadQueue.filter(item => item.status === 'pending');
 
-  for (const item of pendingItems) {
-    item.status = 'processing';
-    renderQueue();
+  // Disable button during processing
+  transcribeAllBtn.disabled = true;
+  transcribeAllBtn.innerHTML = '<span class="spinner"></span> Transcribing...';
 
-    try {
-      const formData = new FormData();
-      formData.append('video', item.file);
+  // Process all videos in parallel
+  await Promise.all(pendingItems.map(item => transcribeVideo(item)));
 
-      const response = await fetch('/api/transcribe', {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error('Transcription failed');
-      }
-
-      const data = await response.json();
-      item.status = 'done';
-      transcriptions.push({
-        filename: data.filename,
-        transcription: data.transcription
-      });
-      renderResults();
-    } catch (error) {
-      item.status = 'error';
-      console.error('Error:', error);
-    }
-
-    renderQueue();
-  }
+  // Reset button
+  transcribeAllBtn.innerHTML = `
+    <span>Transcribe All</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+  `;
+  renderQueue();
 });
 
 function renderResults() {
