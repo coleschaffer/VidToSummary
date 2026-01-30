@@ -143,46 +143,54 @@ function renderQueue() {
   }
 
   queueSection.classList.add('visible');
-  queueList.innerHTML = uploadQueue.map(item => `
-    <div class="queue-item" data-id="${item.id}">
-      <div class="queue-item-info">
-        <div class="queue-item-thumbnail">
-          ${item.thumbnail
-            ? `<img src="${item.thumbnail}" alt="thumbnail">`
-            : `<div class="audio-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M9 18V5l12-2v13"/>
-                  <circle cx="6" cy="18" r="3"/>
-                  <circle cx="18" cy="16" r="3"/>
-                </svg>
-              </div>`
-          }
+  queueList.innerHTML = uploadQueue.map(item => {
+    const isProcessing = item.status === 'processing';
+    const statusDisplay = isProcessing
+      ? `<span class="status-stage">${getStageLabel(item.stage)}: ${item.progress}%</span>`
+      : `<span class="status-badge ${item.status}">${item.status}</span>`;
+
+    return `
+      <div class="queue-item" data-id="${item.id}">
+        <div class="queue-item-info">
+          <div class="queue-item-thumbnail">
+            ${item.thumbnail
+              ? `<img src="${item.thumbnail}" alt="thumbnail">`
+              : `<div class="audio-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 18V5l12-2v13"/>
+                    <circle cx="6" cy="18" r="3"/>
+                    <circle cx="18" cy="16" r="3"/>
+                  </svg>
+                </div>`
+            }
+          </div>
+          <div class="queue-item-details">
+            <span class="queue-item-name">${item.file.name}</span>
+            <span class="queue-item-size">${formatSize(item.file.size)}</span>
+          </div>
         </div>
-        <div class="queue-item-details">
-          <span class="queue-item-name">${item.file.name}</span>
-          <span class="queue-item-size">${formatSize(item.file.size)}</span>
-          ${item.status === 'processing' ? `
+        <div class="queue-item-right">
+          ${isProcessing ? `
             <div class="progress-container">
               <div class="progress-bar">
                 <div class="progress-fill" style="width: ${item.progress}%"></div>
               </div>
-              <span class="progress-text">${getStageLabel(item.stage)}: ${item.progress}%</span>
             </div>
           ` : ''}
+          <div class="queue-item-status">
+            ${statusDisplay}
+            ${item.status === 'pending' ? `
+              <button class="remove-btn" onclick="removeFromQueue(${item.id})">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            ` : ''}
+          </div>
         </div>
       </div>
-      <div class="queue-item-status">
-        <span class="status-badge ${item.status}">${item.status}</span>
-        ${item.status === 'pending' ? `
-          <button class="remove-btn" onclick="removeFromQueue(${item.id})">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        ` : ''}
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   // Update button state
   const hasPending = uploadQueue.some(item => item.status === 'pending');
@@ -271,7 +279,13 @@ async function pollTranscriptionStatus(item, jobId) {
 // Transcribe a single video with progress
 async function transcribeVideo(item) {
   const startTime = Date.now();
+  const fileSizeMB = item.file.size / (1024 * 1024);
   console.log(`[${item.file.name}] Starting transcription... (${formatSize(item.file.size)})`);
+
+  // Warn about large files
+  if (fileSizeMB > 50) {
+    console.warn(`[${item.file.name}] Large file (${fileSizeMB.toFixed(0)}MB) - upload may take several minutes`);
+  }
 
   try {
     // Step 1: Upload file
