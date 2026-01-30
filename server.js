@@ -80,21 +80,70 @@ const SUPADATA_API_KEY = process.env.SUPADATA_API_KEY;
 // RapidAPI for YouTube video downloads
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 
-// Translate transcript to English using Claude
+// Translate transcript to English using Claude (with chunking for large texts)
 async function translateToEnglish(text, sourceLang) {
+  // Check if Anthropic API is configured
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('[API] Translation skipped: ANTHROPIC_API_KEY not configured');
+    return text;
+  }
+
+  const CHUNK_SIZE = 4000; // Characters per chunk
+
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      messages: [{
-        role: 'user',
-        content: `Translate the following transcript from ${sourceLang} to English. Provide only the translated text, maintaining the original formatting and structure. Do not add any explanations or notes.
+    console.log(`[API] Starting translation of ${text.length} chars from ${sourceLang}`);
+    const startTime = Date.now();
+
+    // If text is small enough, translate in one call
+    if (text.length <= CHUNK_SIZE) {
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 8000,
+        messages: [{
+          role: 'user',
+          content: `Translate the following transcript from ${sourceLang} to English. Provide only the translated text, maintaining the original formatting and structure. Do not add any explanations or notes.
 
 Transcript:
 ${text}`
-      }]
-    });
-    return response.content[0].text;
+        }]
+      });
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[API] Translation complete in ${elapsed}s`);
+      return response.content[0].text;
+    }
+
+    // For large texts, split into chunks and translate each
+    const chunks = [];
+    for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+      chunks.push(text.slice(i, i + CHUNK_SIZE));
+    }
+
+    console.log(`[API] Splitting into ${chunks.length} chunks for translation`);
+
+    const translatedChunks = [];
+    for (let i = 0; i < chunks.length; i++) {
+      console.log(`[API] Translating chunk ${i + 1}/${chunks.length}`);
+
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 8000,
+        messages: [{
+          role: 'user',
+          content: `Translate the following transcript segment from ${sourceLang} to English. This is part ${i + 1} of ${chunks.length}. Provide only the translated text, maintaining the original formatting. Do not add any explanations, notes, or segment markers.
+
+Transcript segment:
+${chunks[i]}`
+        }]
+      });
+
+      translatedChunks.push(response.content[0].text);
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[API] Translation complete in ${elapsed}s (${chunks.length} chunks)`);
+
+    return translatedChunks.join(' ');
   } catch (error) {
     console.error('[API] Translation error:', error.message);
     // Return original text if translation fails
@@ -546,9 +595,11 @@ app.post('/api/youtube/transcript', async (req, res) => {
         if (fallbackResult.lang?.startsWith('en')) {
           result = fallbackResult;
           console.log(`[API] en-US fallback successful: ${result.content?.length || 0} chars`);
+        } else {
+          console.log(`[API] en-US fallback also returned ${fallbackResult.lang}, will translate`);
         }
       } catch (e) {
-        console.log('[API] en-US fallback failed, using original result');
+        console.log(`[API] en-US fallback failed: ${e.message}, will translate original`);
       }
     }
 
