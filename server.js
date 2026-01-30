@@ -2,6 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { unlinkSync, mkdirSync, existsSync, createWriteStream } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -562,7 +564,9 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
-// YouTube video download endpoint - uses Cobalt API
+// YouTube video download endpoint - uses yt-dlp
+const execFileAsync = promisify(execFile);
+
 app.get('/api/youtube/download/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
@@ -573,43 +577,28 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    // Use Cobalt API to get download URL
-    const cobaltResponse = await fetch('https://api.cobalt.tools/', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        url: youtubeUrl,
-        videoQuality: '720',
-        filenameStyle: 'basic'
-      })
-    });
+    // Get direct download URL using yt-dlp
+    const { stdout } = await execFileAsync('yt-dlp', [
+      '--get-url',
+      '--format', 'best[ext=mp4]/best',
+      '--no-warnings',
+      youtubeUrl
+    ], { timeout: 30000 });
 
-    const data = await cobaltResponse.json();
-    console.log('[API] Cobalt response:', data.status);
+    const downloadUrl = stdout.trim().split('\n')[0];
 
-    if (data.status === 'error') {
-      return res.status(400).json({ error: data.error?.code || 'Download failed' });
+    if (!downloadUrl) {
+      return res.status(404).json({ error: 'Could not get download URL' });
     }
 
-    // Cobalt returns a redirect URL or stream URL
-    if (data.status === 'redirect' || data.status === 'stream') {
-      return res.redirect(data.url);
-    }
+    console.log('[API] yt-dlp got download URL for:', videoId);
 
-    // For picker (multiple formats), use the first video option
-    if (data.status === 'picker' && data.picker?.length > 0) {
-      const videoOption = data.picker.find(p => p.type === 'video') || data.picker[0];
-      return res.redirect(videoOption.url);
-    }
-
-    res.status(400).json({ error: 'Could not get download URL' });
+    // Redirect to the direct download URL
+    res.redirect(downloadUrl);
 
   } catch (error) {
     console.error('[API] YouTube download error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to get video. The video may be unavailable or restricted.' });
   }
 });
 
