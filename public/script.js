@@ -19,6 +19,7 @@ let transcriptions = [];
 let ffmpeg = null;
 let ffmpegLoaded = false;
 let ffmpegLoading = false;
+let currentProgressCallback = null;
 
 async function loadFFmpeg() {
   if (ffmpegLoaded) return true;
@@ -47,6 +48,10 @@ async function loadFFmpeg() {
     ffmpeg.on('progress', ({ progress }) => {
       const pct = Math.round(progress * 100);
       console.log(`[FFmpeg] Progress: ${pct}%`);
+      // Update UI progress
+      if (currentProgressCallback) {
+        currentProgressCallback('extracting', pct);
+      }
     });
 
     // Load from local files to avoid CORS issues
@@ -66,6 +71,9 @@ async function loadFFmpeg() {
   }
 }
 
+// Queue for FFmpeg extractions (only one at a time to avoid FS conflicts)
+let ffmpegQueue = Promise.resolve();
+
 // Extract audio from video file
 async function extractAudio(file, onProgress) {
   const isVideo = file.type.startsWith('video/');
@@ -81,44 +89,62 @@ async function extractAudio(file, onProgress) {
     return file;
   }
 
-  console.log(`[FFmpeg] Extracting audio from ${file.name}...`);
-  if (onProgress) onProgress('extracting', 0);
+  // Queue this extraction to run after any pending ones
+  const extraction = ffmpegQueue.then(async () => {
+    console.log(`[FFmpeg] Extracting audio from ${file.name}...`);
+    if (onProgress) onProgress('extracting', 0);
 
-  try {
-    const inputName = 'input' + file.name.substring(file.name.lastIndexOf('.'));
-    const outputName = 'output.mp3';
+    // Set the progress callback for this extraction
+    currentProgressCallback = onProgress;
 
-    // Write input file
-    await ffmpeg.writeFile(inputName, await fetchFile(file));
+    // Use unique filenames based on timestamp to avoid conflicts
+    const uniqueId = Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    const inputName = `input_${uniqueId}.mp4`;
+    const outputName = `output_${uniqueId}.mp3`;
 
-    // Extract audio (fast copy if possible, otherwise re-encode)
-    await ffmpeg.exec([
-      '-i', inputName,
-      '-vn',           // No video
-      '-acodec', 'libmp3lame',
-      '-q:a', '4',     // Good quality (~165 kbps)
-      '-y',            // Overwrite
-      outputName
-    ]);
+    try {
+      // Write input file
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-    // Read output
-    const data = await ffmpeg.readFile(outputName);
-    const audioBlob = new Blob([data.buffer], { type: 'audio/mp3' });
-    const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.mp3'), { type: 'audio/mp3' });
+      // Extract audio
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-vn',           // No video
+        '-acodec', 'libmp3lame',
+        '-q:a', '4',     // Good quality (~165 kbps)
+        '-y',            // Overwrite
+        outputName
+      ]);
 
-    // Cleanup
-    await ffmpeg.deleteFile(inputName);
-    await ffmpeg.deleteFile(outputName);
+      // Read output
+      const data = await ffmpeg.readFile(outputName);
+      const audioBlob = new Blob([data.buffer], { type: 'audio/mp3' });
+      const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.mp3'), { type: 'audio/mp3' });
 
-    const reduction = ((1 - audioFile.size / file.size) * 100).toFixed(0);
-    console.log(`[FFmpeg] Extracted audio: ${formatSize(file.size)} → ${formatSize(audioFile.size)} (${reduction}% smaller)`);
+      // Cleanup
+      try { await ffmpeg.deleteFile(inputName); } catch {}
+      try { await ffmpeg.deleteFile(outputName); } catch {}
 
-    if (onProgress) onProgress('extracting', 100);
-    return audioFile;
-  } catch (err) {
-    console.error('[FFmpeg] Extraction failed:', err);
-    return file; // Fall back to original
-  }
+      const reduction = ((1 - audioFile.size / file.size) * 100).toFixed(0);
+      console.log(`[FFmpeg] Extracted audio: ${formatSize(file.size)} → ${formatSize(audioFile.size)} (${reduction}% smaller)`);
+
+      currentProgressCallback = null;
+      if (onProgress) onProgress('extracting', 100);
+      return audioFile;
+    } catch (err) {
+      console.error('[FFmpeg] Extraction failed:', err);
+      currentProgressCallback = null;
+      // Cleanup on error
+      try { await ffmpeg.deleteFile(inputName); } catch {}
+      try { await ffmpeg.deleteFile(outputName); } catch {}
+      return file; // Fall back to original
+    }
+  });
+
+  // Update the queue
+  ffmpegQueue = extraction.catch(() => {});
+
+  return extraction;
 }
 
 // Dropzone handlers
