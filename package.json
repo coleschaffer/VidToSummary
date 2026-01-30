@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@distube/ytdl-core": "^4.16.12",
     "assemblyai": "^4.8.0",
     "cookie-parser": "^1.4.6",
     "dotenv": "^16.3.1",

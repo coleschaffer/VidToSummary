@@ -2,7 +2,6 @@ import express from 'express';
 import multer from 'multer';
 import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
-import ytdl from '@distube/ytdl-core';
 import { unlinkSync, mkdirSync, existsSync, createWriteStream } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -563,7 +562,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
-// YouTube video download endpoint
+// YouTube video download endpoint - uses Cobalt API
 app.get('/api/youtube/download/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
@@ -571,40 +570,42 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    // Get video info for title and format selection
-    const info = await ytdl.getInfo(url);
-    const title = info.videoDetails.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
-
-    // Choose the best format with both video and audio
-    const format = ytdl.chooseFormat(info.formats, {
-      quality: 'highest',
-      filter: 'audioandvideo'
+    // Use Cobalt API to get download URL
+    const cobaltResponse = await fetch('https://api.cobalt.tools/', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: youtubeUrl,
+        videoQuality: '720',
+        filenameStyle: 'basic'
+      })
     });
 
-    if (!format) {
-      return res.status(404).json({ error: 'No suitable format found' });
+    const data = await cobaltResponse.json();
+    console.log('[API] Cobalt response:', data.status);
+
+    if (data.status === 'error') {
+      return res.status(400).json({ error: data.error?.code || 'Download failed' });
     }
 
-    // Set headers for file download
-    res.setHeader('Content-Disposition', `attachment; filename="${title}.${format.container || 'mp4'}"`);
-    res.setHeader('Content-Type', format.mimeType || 'video/mp4');
-    if (format.contentLength) {
-      res.setHeader('Content-Length', format.contentLength);
+    // Cobalt returns a redirect URL or stream URL
+    if (data.status === 'redirect' || data.status === 'stream') {
+      return res.redirect(data.url);
     }
 
-    // Stream the video to the response
-    const stream = ytdl(url, { format });
-    stream.pipe(res);
+    // For picker (multiple formats), use the first video option
+    if (data.status === 'picker' && data.picker?.length > 0) {
+      const videoOption = data.picker.find(p => p.type === 'video') || data.picker[0];
+      return res.redirect(videoOption.url);
+    }
 
-    stream.on('error', (err) => {
-      console.error('[API] YouTube download stream error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Download failed' });
-      }
-    });
+    res.status(400).json({ error: 'Could not get download URL' });
 
   } catch (error) {
     console.error('[API] YouTube download error:', error);
