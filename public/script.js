@@ -16,7 +16,7 @@ const historyToggle = document.getElementById('historyToggle');
 const closeSidebar = document.getElementById('closeSidebar');
 const historyList = document.getElementById('historyList');
 const clearHistoryBtn = document.getElementById('clearHistory');
-const youtubeUrlInput = document.getElementById('youtubeUrl');
+const youtubeUrlsList = document.getElementById('youtubeUrlsList');
 const fetchYoutubeBtn = document.getElementById('fetchYoutubeBtn');
 const tabBtns = document.querySelectorAll('.tab-btn');
 
@@ -156,57 +156,146 @@ tabBtns.forEach(btn => {
 });
 
 // ==================== YOUTUBE TRANSCRIPT ====================
-fetchYoutubeBtn.addEventListener('click', fetchYoutubeTranscript);
-youtubeUrlInput.addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') fetchYoutubeTranscript();
-});
+let youtubeUrlIndex = 0;
 
-async function fetchYoutubeTranscript() {
-  const url = youtubeUrlInput.value.trim();
-  if (!url) return;
+function createYoutubeInputRow(index) {
+  const row = document.createElement('div');
+  row.className = 'youtube-input-row';
+  row.dataset.index = index;
+  row.innerHTML = `
+    <div class="youtube-input-wrapper">
+      <svg class="youtube-icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+      </svg>
+      <input type="text" class="youtube-url-input" placeholder="Paste YouTube URL here..." autocomplete="off">
+      <button class="remove-url-btn" onclick="removeYoutubeUrl(${index})" title="Remove">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  `;
+  return row;
+}
 
-  // Validate YouTube URL
+function setupYoutubeInputListeners() {
+  youtubeUrlsList.addEventListener('input', (e) => {
+    if (!e.target.classList.contains('youtube-url-input')) return;
+
+    const rows = youtubeUrlsList.querySelectorAll('.youtube-input-row');
+    const lastRow = rows[rows.length - 1];
+    const lastInput = lastRow.querySelector('.youtube-url-input');
+
+    // If the last input has a value, add a new row
+    if (lastInput.value.trim() && e.target === lastInput) {
+      youtubeUrlIndex++;
+      const newRow = createYoutubeInputRow(youtubeUrlIndex);
+      youtubeUrlsList.appendChild(newRow);
+      updateRemoveButtons();
+    }
+  });
+
+  youtubeUrlsList.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && e.target.classList.contains('youtube-url-input')) {
+      e.preventDefault();
+      fetchYoutubeTranscripts();
+    }
+  });
+}
+
+function updateRemoveButtons() {
+  const rows = youtubeUrlsList.querySelectorAll('.youtube-input-row');
+  rows.forEach((row, i) => {
+    const removeBtn = row.querySelector('.remove-url-btn');
+    if (removeBtn) {
+      // Hide remove button if it's the only row or the last empty row
+      removeBtn.style.display = rows.length <= 1 ? 'none' : 'flex';
+    }
+  });
+}
+
+window.removeYoutubeUrl = function(index) {
+  const row = youtubeUrlsList.querySelector(`[data-index="${index}"]`);
+  if (row) {
+    row.remove();
+    updateRemoveButtons();
+  }
+};
+
+setupYoutubeInputListeners();
+updateRemoveButtons();
+
+fetchYoutubeBtn.addEventListener('click', fetchYoutubeTranscripts);
+
+function truncateTitle(title, maxLength = 50) {
+  if (title.length <= maxLength) return title;
+  return title.substring(0, maxLength - 3) + '...';
+}
+
+async function fetchYoutubeTranscripts() {
+  const inputs = youtubeUrlsList.querySelectorAll('.youtube-url-input');
+  const urls = Array.from(inputs)
+    .map(input => input.value.trim())
+    .filter(url => url.length > 0);
+
+  if (urls.length === 0) return;
+
+  // Validate all URLs
   const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
-  if (!youtubeRegex.test(url)) {
-    alert('Please enter a valid YouTube URL');
+  const invalidUrls = urls.filter(url => !youtubeRegex.test(url));
+  if (invalidUrls.length > 0) {
+    alert(`Invalid YouTube URL(s):\n${invalidUrls.join('\n')}`);
     return;
   }
 
   fetchYoutubeBtn.disabled = true;
-  fetchYoutubeBtn.innerHTML = '<span class="spinner"></span> Fetching...';
+  fetchYoutubeBtn.innerHTML = `<span class="spinner"></span> Fetching ${urls.length} video${urls.length > 1 ? 's' : ''}...`;
 
-  try {
-    const response = await fetch('/api/youtube/transcript', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
-    });
+  let successCount = 0;
+  let errors = [];
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to fetch transcript');
+  for (const url of urls) {
+    try {
+      const response = await fetch('/api/youtube/transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch transcript');
+      }
+
+      const data = await response.json();
+
+      // Use video title, truncated if needed
+      const displayTitle = truncateTitle(data.title || data.videoId);
+
+      // Add to transcriptions
+      transcriptions.push({
+        filename: displayTitle,
+        transcription: data.transcript,
+        videoId: data.videoId,
+        source: 'youtube'
+      });
+
+      successCount++;
+      renderResults();
+
+    } catch (error) {
+      errors.push(`${url}: ${error.message}`);
     }
+  }
 
-    const data = await response.json();
+  // Clear inputs and reset to single input
+  youtubeUrlsList.innerHTML = '';
+  youtubeUrlIndex = 0;
+  youtubeUrlsList.appendChild(createYoutubeInputRow(0));
+  updateRemoveButtons();
 
-    // Extract video title from URL or use video ID
-    const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
-    const filename = `YouTube - ${videoId}`;
-
-    // Add to transcriptions
-    transcriptions.push({
-      filename,
-      transcription: data.transcript,
-      videoId: data.videoId,
-      source: 'youtube'
-    });
-
-    // Clear input
-    youtubeUrlInput.value = '';
-
-    // Show results
-    renderResults();
-
+  // Show results
+  if (successCount > 0) {
     // Save to history
     saveToHistory({
       id: Date.now(),
@@ -218,13 +307,14 @@ async function fetchYoutubeTranscript() {
       })),
       summaries: []
     });
-
-  } catch (error) {
-    alert('Error: ' + error.message);
-  } finally {
-    fetchYoutubeBtn.disabled = false;
-    fetchYoutubeBtn.innerHTML = '<span>Get Transcript</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
   }
+
+  if (errors.length > 0) {
+    alert(`Some videos failed:\n${errors.join('\n')}`);
+  }
+
+  fetchYoutubeBtn.disabled = false;
+  fetchYoutubeBtn.innerHTML = '<span>Get Transcripts</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
 }
 
 // ==================== FFMPEG ====================

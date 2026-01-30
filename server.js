@@ -487,9 +487,26 @@ app.post('/api/youtube/transcript', async (req, res) => {
 
         if (pollData.status === 'completed') {
           console.log(`[API] YouTube transcript complete: ${pollData.content?.length || 0} chars`);
+
+          // Extract video ID and fetch title
+          const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
+          let title = videoId;
+          try {
+            const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+            const oembedResponse = await fetch(oembedUrl);
+            if (oembedResponse.ok) {
+              const oembedData = await oembedResponse.json();
+              title = oembedData.title || videoId;
+            }
+          } catch (e) {
+            console.log(`[API] Could not fetch video title: ${e.message}`);
+          }
+
           return res.json({
             transcript: pollData.content,
             lang: pollData.lang,
+            videoId: videoId,
+            title: title,
             source: 'youtube'
           });
         } else if (pollData.status === 'failed') {
@@ -516,13 +533,27 @@ app.post('/api/youtube/transcript', async (req, res) => {
     const data = await response.json();
     console.log(`[API] YouTube transcript fetched: ${data.content?.length || 0} chars`);
 
-    // Extract video title from URL for filename
+    // Extract video ID and fetch title
     const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
+    let title = videoId;
+
+    // Fetch video title using YouTube oEmbed (no API key needed)
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const oembedResponse = await fetch(oembedUrl);
+      if (oembedResponse.ok) {
+        const oembedData = await oembedResponse.json();
+        title = oembedData.title || videoId;
+      }
+    } catch (e) {
+      console.log(`[API] Could not fetch video title: ${e.message}`);
+    }
 
     res.json({
       transcript: data.content,
       lang: data.lang,
       videoId: videoId,
+      title: title,
       source: 'youtube'
     });
   } catch (error) {

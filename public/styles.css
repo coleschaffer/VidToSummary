@@ -212,6 +212,45 @@ h3 {
   margin-top: 12px;
 }
 
+.youtube-urls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.youtube-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.youtube-input-row .youtube-input-wrapper {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.remove-url-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.remove-url-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: var(--error);
+  color: var(--error);
+}
+
 /* Queue Section */
 .queue-section {
   display: none;
