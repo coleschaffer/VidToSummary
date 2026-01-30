@@ -759,7 +759,6 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
   }
 
   const sessionId = Date.now().toString();
-  const sourceFile = join(tempDir, `${sessionId}_source.mp4`);
   const clipFiles = [];
 
   try {
@@ -797,32 +796,12 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
       return res.status(404).json({ error: 'No download URL available for this video' });
     }
 
-    // Download the full video to temp file
-    console.log('[API] Downloading source video...');
     console.log('[API] Download URL:', downloadUrl.substring(0, 100) + '...');
 
-    const videoResponse = await fetch(downloadUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.youtube.com/'
-      }
-    });
+    // Create each clip using FFmpeg directly from URL (FFmpeg handles HTTP better)
+    // Using -ss before -i for fast seeking
+    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-    if (!videoResponse.ok) {
-      console.error('[API] Video fetch failed:', videoResponse.status, videoResponse.statusText);
-      throw new Error(`Failed to fetch video: ${videoResponse.status}`);
-    }
-
-    const writer = createWriteStream(sourceFile);
-    const nodeStream = await import('stream');
-    const readable = nodeStream.Readable.fromWeb(videoResponse.body);
-    await pipeline(readable, writer);
-
-    console.log('[API] Source video downloaded, creating clips...');
-
-    // Create each clip using FFmpeg
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
       const clipFile = join(tempDir, `${sessionId}_clip_${i + 1}.mp4`);
@@ -830,9 +809,15 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
 
       console.log(`[API] Creating clip ${i + 1}/${clips.length}: ${clip.start} - ${clip.end}`);
 
-      // FFmpeg command: -ss start -to end -c copy for fast trimming
-      const ffmpegCmd = `ffmpeg -y -i "${sourceFile}" -ss ${clip.start} -to ${clip.end} -c copy "${clipFile}"`;
-      await execAsync(ffmpegCmd);
+      // FFmpeg command with headers and direct URL input
+      const ffmpegCmd = `ffmpeg -y -user_agent "${userAgent}" -referer "https://www.youtube.com/" -ss ${clip.start} -i "${downloadUrl}" -to ${clip.end} -c copy "${clipFile}"`;
+
+      try {
+        await execAsync(ffmpegCmd, { timeout: 120000 }); // 2 minute timeout per clip
+      } catch (ffmpegError) {
+        console.error(`[API] FFmpeg error for clip ${i + 1}:`, ffmpegError.message);
+        throw new Error(`Failed to create clip ${i + 1}: ${ffmpegError.message}`);
+      }
     }
 
     console.log('[API] All clips created');
@@ -853,7 +838,6 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
       clipStream.on('end', () => {
         // Cleanup temp files
         try {
-          unlinkSync(sourceFile);
           unlinkSync(clipFile);
         } catch (e) {
           console.log('[API] Cleanup error:', e.message);
@@ -884,7 +868,6 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
 
     // Cleanup temp files
     try {
-      unlinkSync(sourceFile);
       for (const { file } of clipFiles) {
         unlinkSync(file);
       }
@@ -897,7 +880,6 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
 
     // Cleanup on error
     try {
-      if (existsSync(sourceFile)) unlinkSync(sourceFile);
       for (const { file } of clipFiles) {
         if (existsSync(file)) unlinkSync(file);
       }
