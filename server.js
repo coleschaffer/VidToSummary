@@ -167,13 +167,16 @@ const activeTranscriptions = new Map();
 
 // Start transcription - returns job ID for progress polling
 app.post('/api/transcribe/start', (req, res, next) => {
-  console.log(`[API] /api/transcribe/start - Upload starting...`);
+  const contentLength = req.headers['content-length'];
+  console.log(`[API] /api/transcribe/start - Upload starting... Content-Length: ${contentLength}`);
   next();
 }, upload.single('video'), async (req, res) => {
   console.log(`[API] /api/transcribe/start - Upload complete, processing...`);
+  console.log(`[API] Request body keys:`, Object.keys(req.body || {}));
+  console.log(`[API] File received:`, req.file ? `${req.file.originalname} (${req.file.size} bytes)` : 'NONE');
 
   if (!req.file) {
-    console.log(`[API] /api/transcribe/start - No file received!`);
+    console.log(`[API] /api/transcribe/start - No file received! Headers:`, JSON.stringify(req.headers).substring(0, 500));
     return res.status(400).json({ error: 'No video file uploaded' });
   }
 

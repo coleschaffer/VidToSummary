@@ -50,7 +50,10 @@ async function loadFFmpeg() {
       console.log(`[FFmpeg] Progress: ${pct}%`);
       // Update UI progress
       if (currentProgressCallback) {
+        console.log(`[FFmpeg] Calling progress callback with ${pct}%`);
         currentProgressCallback('extracting', pct);
+      } else {
+        console.log(`[FFmpeg] No progress callback set!`);
       }
     });
 
@@ -428,6 +431,7 @@ async function transcribeVideo(item) {
 
       console.log(`[${item.file.name}] Extracting audio...`);
       fileToUpload = await extractAudio(item.file, (stage, progress) => {
+        console.log(`[${item.file.name}] Progress callback: ${stage} ${progress}%`);
         item.stage = stage;
         item.progress = progress;
         renderQueue();
