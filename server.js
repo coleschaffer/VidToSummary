@@ -667,11 +667,13 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     });
 
     if (!apiResponse.ok) {
+      const errorText = await apiResponse.text().catch(() => 'No response body');
+      console.error(`[API] RapidAPI error ${apiResponse.status}:`, errorText);
       throw new Error(`RapidAPI error: ${apiResponse.status}`);
     }
 
     const data = await apiResponse.json();
-    console.log('[API] RapidAPI response received for:', videoId);
+    console.log('[API] RapidAPI response received for:', videoId, '- videos:', data.videos?.items?.length || 0);
 
     // Find a suitable video format (prefer 720p mp4)
     let downloadUrl;
@@ -684,6 +686,7 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
         || data.videos.items[0];
 
       downloadUrl = video.url;
+      console.log('[API] Selected quality:', video.quality, video.extension);
       if (data.title) {
         const safeTitle = data.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
         filename = `${safeTitle}.${video.extension || 'mp4'}`;
@@ -691,32 +694,42 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     }
 
     if (!downloadUrl) {
+      console.error('[API] No download URL found. Response:', JSON.stringify(data).substring(0, 500));
       return res.status(404).json({ error: 'No download URL available for this video' });
     }
 
-    console.log('[API] Proxying video download for:', videoId);
+    console.log('[API] Proxying video download for:', videoId, '- URL:', downloadUrl.substring(0, 80) + '...');
 
     // Fetch the video and proxy it through our server
     const videoResponse = await fetch(downloadUrl);
 
     if (!videoResponse.ok) {
+      console.error(`[API] Video fetch failed: ${videoResponse.status} ${videoResponse.statusText}`);
       throw new Error(`Failed to fetch video: ${videoResponse.status}`);
     }
+
+    const contentLength = videoResponse.headers.get('content-length');
+    console.log('[API] Video response OK, size:', contentLength ? `${(parseInt(contentLength) / 1024 / 1024).toFixed(1)}MB` : 'unknown');
 
     // Set response headers
     res.setHeader('Content-Type', videoResponse.headers.get('content-type') || 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    if (videoResponse.headers.get('content-length')) {
-      res.setHeader('Content-Length', videoResponse.headers.get('content-length'));
+    if (contentLength) {
+      res.setHeader('Content-Length', contentLength);
     }
 
     // Stream the video to the client
     const nodeStream = await import('stream');
     const readable = nodeStream.Readable.fromWeb(videoResponse.body);
+
+    readable.on('error', (err) => {
+      console.error('[API] Stream error:', err.message);
+    });
+
     readable.pipe(res);
 
   } catch (error) {
-    console.error('[API] YouTube download error:', error);
+    console.error('[API] YouTube download error:', error.message);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Failed to download video. Please try again.' });
     }
