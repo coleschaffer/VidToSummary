@@ -27,25 +27,35 @@ dropzone.addEventListener('dragleave', () => {
   dropzone.classList.remove('dragover');
 });
 
-dropzone.addEventListener('drop', (e) => {
+dropzone.addEventListener('drop', async (e) => {
   e.preventDefault();
   dropzone.classList.remove('dragover');
-  // Convert DataTransfer files to proper File objects
+
   const files = Array.from(e.dataTransfer.files);
-  handleFiles(files);
+
+  // Check for 0-byte files (common when dragging from Chrome Downloads)
+  const zeroByteFiles = files.filter(f => f.size === 0);
+  if (zeroByteFiles.length > 0) {
+    alert(`${zeroByteFiles.length} file(s) appear empty (0 bytes). This often happens when dragging directly from Chrome's download bar.\n\nPlease drag files from Finder/Explorer instead, or use the file picker.`);
+  }
+
+  // Only add files with actual content
+  const validFiles = files.filter(f => f.size > 0);
+  if (validFiles.length > 0) {
+    await handleFiles(validFiles);
+  }
 });
 
-fileInput.addEventListener('change', (e) => {
+fileInput.addEventListener('change', async (e) => {
   const files = Array.from(e.target.files);
-  handleFiles(files);
+  await handleFiles(files);
   fileInput.value = '';
 });
 
 // Generate thumbnail from video file
 function generateThumbnail(file) {
   return new Promise((resolve) => {
-    if (file.type.startsWith('audio/')) {
-      // Return null for audio files (will show audio icon instead)
+    if (!file.type.startsWith('video/') || file.size === 0) {
       resolve(null);
       return;
     }
@@ -58,12 +68,17 @@ function generateThumbnail(file) {
     video.muted = true;
     video.playsInline = true;
 
+    const timeout = setTimeout(() => {
+      URL.revokeObjectURL(video.src);
+      resolve(null);
+    }, 5000);
+
     video.onloadeddata = () => {
-      // Seek to 1 second or 10% of duration, whichever is smaller
       video.currentTime = Math.min(1, video.duration * 0.1);
     };
 
     video.onseeked = () => {
+      clearTimeout(timeout);
       canvas.width = 80;
       canvas.height = 45;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -73,6 +88,8 @@ function generateThumbnail(file) {
     };
 
     video.onerror = () => {
+      clearTimeout(timeout);
+      URL.revokeObjectURL(video.src);
       resolve(null);
     };
 
@@ -82,7 +99,9 @@ function generateThumbnail(file) {
 
 async function handleFiles(files) {
   for (const file of files) {
-    // Check file type - also handle cases where type might be empty
+    // Skip 0-byte files
+    if (file.size === 0) continue;
+
     const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|avi|mkv)$/i);
     const isAudio = file.type.startsWith('audio/') || file.name.match(/\.(mp3|wav|m4a|aac|ogg)$/i);
 
@@ -100,15 +119,10 @@ async function handleFiles(files) {
 }
 
 function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function formatDuration(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 function renderQueue() {
@@ -162,11 +176,8 @@ window.removeFromQueue = function(id) {
   renderQueue();
 };
 
-// Transcribe a single video
+// Transcribe a single video (returns promise, doesn't render during)
 async function transcribeVideo(item) {
-  item.status = 'processing';
-  renderQueue();
-
   try {
     const formData = new FormData();
     formData.append('video', item.file);
@@ -183,31 +194,52 @@ async function transcribeVideo(item) {
 
     const data = await response.json();
     item.status = 'done';
+    item.videoId = data.videoId;
     transcriptions.push({
       filename: data.filename,
-      transcription: data.transcription
+      transcription: data.transcription,
+      videoId: data.videoId
     });
-    renderResults();
+    return { success: true, item };
   } catch (error) {
     item.status = 'error';
-    console.error('Error:', error);
+    item.error = error.message;
+    console.error('Transcription error:', error);
+    return { success: false, item, error };
   }
-
-  renderQueue();
 }
 
-// Transcribe all videos in parallel
+// Transcribe all videos in PARALLEL
 transcribeAllBtn.addEventListener('click', async () => {
   const pendingItems = uploadQueue.filter(item => item.status === 'pending');
+  if (pendingItems.length === 0) return;
 
-  // Disable button during processing
+  // Disable button
   transcribeAllBtn.disabled = true;
   transcribeAllBtn.innerHTML = '<span class="spinner"></span> Transcribing...';
 
-  // Process all videos in parallel
-  await Promise.all(pendingItems.map(item => transcribeVideo(item)));
+  // Set ALL items to processing FIRST, then render once
+  pendingItems.forEach(item => {
+    item.status = 'processing';
+  });
+  renderQueue();
+
+  // Start ALL transcriptions in parallel
+  const promises = pendingItems.map(item => transcribeVideo(item));
+
+  // As each completes, update the UI
+  for (const promise of promises) {
+    promise.then(() => {
+      renderQueue();
+      renderResults();
+    });
+  }
+
+  // Wait for all to complete
+  await Promise.all(promises);
 
   // Reset button
+  transcribeAllBtn.disabled = false;
   transcribeAllBtn.innerHTML = `
     <span>Transcribe All</span>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -269,12 +301,16 @@ runPromptBtn.addEventListener('click', async () => {
       .map(t => `## ${t.filename}\n\n${t.transcription}`)
       .join('\n\n---\n\n');
 
+    // Get video IDs for database linking
+    const videoIds = transcriptions.map(t => t.videoId).filter(Boolean);
+
     const response = await fetch('/api/summarize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transcription: combinedTranscription,
-        prompt
+        prompt,
+        videoIds
       })
     });
 
