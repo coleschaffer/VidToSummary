@@ -2,7 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import { AssemblyAI } from 'assemblyai';
 import Anthropic from '@anthropic-ai/sdk';
-import { unlinkSync, mkdirSync, existsSync } from 'fs';
+import ytdl from '@distube/ytdl-core';
+import { unlinkSync, mkdirSync, existsSync, createWriteStream } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
@@ -558,6 +559,55 @@ app.post('/api/youtube/transcript', async (req, res) => {
     });
   } catch (error) {
     console.error('[API] YouTube transcript error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// YouTube video download endpoint
+app.get('/api/youtube/download/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+
+  if (!videoId || videoId.length !== 11) {
+    return res.status(400).json({ error: 'Invalid video ID' });
+  }
+
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+  try {
+    // Get video info for title and format selection
+    const info = await ytdl.getInfo(url);
+    const title = info.videoDetails.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
+
+    // Choose the best format with both video and audio
+    const format = ytdl.chooseFormat(info.formats, {
+      quality: 'highest',
+      filter: 'audioandvideo'
+    });
+
+    if (!format) {
+      return res.status(404).json({ error: 'No suitable format found' });
+    }
+
+    // Set headers for file download
+    res.setHeader('Content-Disposition', `attachment; filename="${title}.${format.container || 'mp4'}"`);
+    res.setHeader('Content-Type', format.mimeType || 'video/mp4');
+    if (format.contentLength) {
+      res.setHeader('Content-Length', format.contentLength);
+    }
+
+    // Stream the video to the response
+    const stream = ytdl(url, { format });
+    stream.pipe(res);
+
+    stream.on('error', (err) => {
+      console.error('[API] YouTube download stream error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Download failed' });
+      }
+    });
+
+  } catch (error) {
+    console.error('[API] YouTube download error:', error);
     res.status(500).json({ error: error.message });
   }
 });

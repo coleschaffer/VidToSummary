@@ -564,7 +564,8 @@ function renderResults() {
       <div class="result-content">
         <div class="result-actions">
           <button class="btn-icon" onclick="copyText(${i}, 'transcript', event)" title="Copy"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
-          <button class="btn-icon" onclick="downloadText(${i}, 'transcript', event)" title="Download"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
+          <button class="btn-icon" onclick="downloadText(${i}, 'transcript', event)" title="Download Transcript"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
+          ${item.source === 'youtube' && item.videoId ? `<button class="btn-icon" onclick="downloadVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
         </div>
         <div class="transcription-text">${item.transcription}</div>
       </div>
@@ -611,6 +612,34 @@ window.downloadText = function(index, type, event) {
   const suffix = type === 'transcript' ? '_transcript' : '_summary';
   downloadFile(text, item.filename.replace(/\.[^/.]+$/, '') + suffix + '.txt');
   showSuccess(event.currentTarget);
+};
+
+window.downloadVideo = function(index, event) {
+  event.stopPropagation();
+  const item = transcriptions[index];
+  if (!item || !item.videoId || item.source !== 'youtube') return;
+
+  const btn = event.currentTarget;
+  const originalHTML = btn.innerHTML;
+
+  // Show loading state
+  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>';
+  btn.disabled = true;
+
+  // Create a hidden link to trigger the download
+  const a = document.createElement('a');
+  a.href = `/api/youtube/download/${item.videoId}`;
+  a.download = `${item.filename}.mp4`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  // Show success after a short delay (since we can't track actual download completion)
+  setTimeout(() => {
+    btn.innerHTML = originalHTML;
+    btn.disabled = false;
+    showSuccess(btn);
+  }, 1500);
 };
 
 function downloadFile(content, filename) {
