@@ -815,18 +815,20 @@ h3 {
 
 .btn-icon .icon-success {
   position: absolute;
+  top: 50%;
+  left: 50%;
   opacity: 0;
-  transform: scale(0.5);
+  transform: translate(-50%, -50%) scale(0.5);
+}
+
+.btn-icon.success .icon-success {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
 }
 
 .btn-icon.success .icon-default {
   opacity: 0;
   transform: scale(0.5);
-}
-
-.btn-icon.success .icon-success {
-  opacity: 1;
-  transform: scale(1);
 }
 
 .btn-icon.success {
