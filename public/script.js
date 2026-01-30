@@ -49,8 +49,10 @@ async function loadFFmpeg() {
       console.log(`[FFmpeg] Progress: ${pct}%`);
     });
 
+    // Load from local files to avoid CORS issues
     await ffmpeg.load({
-      coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+      coreURL: '/ffmpeg/ffmpeg-core.js',
+      wasmURL: '/ffmpeg/ffmpeg-core.wasm',
     });
 
     ffmpegLoaded = true;
