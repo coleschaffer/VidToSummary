@@ -54,8 +54,15 @@ const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 app.use(express.static(join(__dirname, 'public')));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
+
+// Log all incoming requests
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 
 // Admin authentication middleware
 function requireAdmin(req, res, next) {
@@ -151,8 +158,14 @@ let currentSessionVideoIds = [];
 const activeTranscriptions = new Map();
 
 // Start transcription - returns job ID for progress polling
-app.post('/api/transcribe/start', upload.single('video'), async (req, res) => {
+app.post('/api/transcribe/start', (req, res, next) => {
+  console.log(`[API] /api/transcribe/start - Upload starting...`);
+  next();
+}, upload.single('video'), async (req, res) => {
+  console.log(`[API] /api/transcribe/start - Upload complete, processing...`);
+
   if (!req.file) {
+    console.log(`[API] /api/transcribe/start - No file received!`);
     return res.status(400).json({ error: 'No video file uploaded' });
   }
 
