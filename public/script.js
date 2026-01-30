@@ -976,42 +976,113 @@ window.downloadClips = async function() {
   const btn = document.getElementById('downloadClipsBtn');
   const originalHTML = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> Creating clips...';
+
+  const updateStatus = (msg) => {
+    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${msg}`;
+  };
 
   try {
-    const response = await fetch(`/api/youtube/clip/${clipModalVideoId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clips })
-    });
+    // Step 1: Get video URL from server
+    updateStatus('Getting video URL...');
+    const urlResponse = await fetch(`/api/youtube/video-url/${clipModalVideoId}`);
+    if (!urlResponse.ok) {
+      const error = await urlResponse.json();
+      throw new Error(error.error || 'Failed to get video URL');
+    }
+    const videoInfo = await urlResponse.json();
+    console.log('[Clips] Got video URL:', videoInfo.url.substring(0, 50) + '...');
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to create clips');
+    // Step 2: Download video in browser
+    updateStatus('Downloading video...');
+    const videoResponse = await fetch(videoInfo.url);
+    if (!videoResponse.ok) {
+      throw new Error('Failed to download video');
+    }
+    const videoBlob = await videoResponse.blob();
+    console.log('[Clips] Video downloaded:', formatSize(videoBlob.size));
+
+    // Step 3: Load FFmpeg
+    updateStatus('Loading FFmpeg...');
+    const loaded = await loadFFmpeg();
+    if (!loaded) {
+      throw new Error('Failed to load FFmpeg');
     }
 
-    // Get the blob and trigger download
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
+    const { fetchFile } = FFmpegUtil;
+    const inputName = 'input.mp4';
+    const clipBlobs = [];
 
-    // Determine filename from Content-Disposition header or use default
-    const contentDisposition = response.headers.get('Content-Disposition');
-    let filename = clips.length > 1 ? `${clipModalVideoTitle}_clips.zip` : `${clipModalVideoTitle}_clip.mp4`;
-    if (contentDisposition) {
-      const match = contentDisposition.match(/filename="(.+)"/);
-      if (match) filename = match[1];
+    // Write video to FFmpeg filesystem
+    updateStatus('Processing video...');
+    await ffmpeg.writeFile(inputName, await fetchFile(videoBlob));
+
+    // Step 4: Create each clip
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      const outputName = `clip_${i + 1}.mp4`;
+      updateStatus(`Creating clip ${i + 1}/${clips.length}...`);
+
+      console.log(`[Clips] Creating clip ${i + 1}: ${clip.start} to ${clip.end}`);
+
+      // FFmpeg command: -ss start -to end -c copy for fast trimming
+      await ffmpeg.exec([
+        '-ss', clip.start,
+        '-i', inputName,
+        '-to', clip.end,
+        '-c', 'copy',
+        '-y', outputName
+      ]);
+
+      const clipData = await ffmpeg.readFile(outputName);
+      const clipBlob = new Blob([clipData.buffer], { type: 'video/mp4' });
+      clipBlobs.push({
+        blob: clipBlob,
+        start: clip.start.replace(/:/g, '-'),
+        end: clip.end.replace(/:/g, '-')
+      });
+
+      // Clean up output file
+      try { await ffmpeg.deleteFile(outputName); } catch {}
     }
 
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Clean up input file
+    try { await ffmpeg.deleteFile(inputName); } catch {}
+
+    // Step 5: Download clip(s)
+    if (clipBlobs.length === 1) {
+      // Single clip - download directly
+      const url = URL.createObjectURL(clipBlobs[0].blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${clipModalVideoTitle}_${clipBlobs[0].start}_to_${clipBlobs[0].end}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } else {
+      // Multiple clips - create zip
+      updateStatus('Creating zip file...');
+      const zip = new JSZip();
+      for (let i = 0; i < clipBlobs.length; i++) {
+        const { blob, start, end } = clipBlobs[i];
+        const filename = `${clipModalVideoTitle}_clip${i + 1}_${start}_to_${end}.mp4`;
+        zip.file(filename, blob);
+      }
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${clipModalVideoTitle}_clips.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
 
     closeClipModal();
+    console.log('[Clips] Done!');
   } catch (error) {
+    console.error('[Clips] Error:', error);
     alert('Error: ' + error.message);
   } finally {
     btn.disabled = false;

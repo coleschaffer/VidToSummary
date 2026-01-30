@@ -723,6 +723,60 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
   }
 });
 
+// Get YouTube video URL (for client-side processing)
+app.get('/api/youtube/video-url/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+
+  if (!videoId || videoId.length !== 11) {
+    return res.status(400).json({ error: 'Invalid video ID' });
+  }
+
+  if (!RAPIDAPI_KEY) {
+    return res.status(500).json({ error: 'Video download service not configured' });
+  }
+
+  try {
+    console.log(`[API] Getting video URL for: ${videoId}`);
+
+    const apiUrl = `https://youtube-media-downloader.p.rapidapi.com/v2/video/details?videoId=${videoId}`;
+    const apiResponse = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
+        'x-rapidapi-key': RAPIDAPI_KEY
+      }
+    });
+
+    if (!apiResponse.ok) {
+      throw new Error(`RapidAPI error: ${apiResponse.status}`);
+    }
+
+    const data = await apiResponse.json();
+
+    if (!data.videos?.items || data.videos.items.length === 0) {
+      return res.status(404).json({ error: 'No video formats available' });
+    }
+
+    // Find suitable format (prefer 720p mp4)
+    const video = data.videos.items.find(v => v.quality === '720p' && v.extension === 'mp4')
+      || data.videos.items.find(v => v.extension === 'mp4')
+      || data.videos.items[0];
+
+    const safeTitle = data.title?.replace(/[<>:"/\\|?*]/g, '').substring(0, 100) || videoId;
+
+    res.json({
+      url: video.url,
+      title: safeTitle,
+      quality: video.quality,
+      extension: video.extension || 'mp4'
+    });
+
+  } catch (error) {
+    console.error('[API] Video URL error:', error);
+    res.status(500).json({ error: 'Failed to get video URL' });
+  }
+});
+
 // YouTube video clip endpoint - download and trim video segments
 const execAsync = promisify(exec);
 
