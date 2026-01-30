@@ -178,21 +178,32 @@ window.removeFromQueue = function(id) {
 
 // Transcribe a single video (returns promise, doesn't render during)
 async function transcribeVideo(item) {
+  const startTime = Date.now();
+  console.log(`[${item.file.name}] Starting upload... (${formatSize(item.file.size)})`);
+
   try {
     const formData = new FormData();
     formData.append('video', item.file);
 
+    console.log(`[${item.file.name}] Sending to /api/transcribe...`);
     const response = await fetch('/api/transcribe', {
       method: 'POST',
       body: formData
     });
 
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[${item.file.name}] Response received after ${elapsed}s, status: ${response.status}`);
+
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
+      console.error(`[${item.file.name}] Error response:`, errorData);
       throw new Error(errorData.error || 'Transcription failed');
     }
 
     const data = await response.json();
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[${item.file.name}] ✓ Transcription complete! Total time: ${totalTime}s`);
+
     item.status = 'done';
     item.videoId = data.videoId;
     transcriptions.push({
@@ -204,7 +215,7 @@ async function transcribeVideo(item) {
   } catch (error) {
     item.status = 'error';
     item.error = error.message;
-    console.error('Transcription error:', error);
+    console.error(`[${item.file.name}] ✗ Transcription failed:`, error);
     return { success: false, item, error };
   }
 }
@@ -213,6 +224,11 @@ async function transcribeVideo(item) {
 transcribeAllBtn.addEventListener('click', async () => {
   const pendingItems = uploadQueue.filter(item => item.status === 'pending');
   if (pendingItems.length === 0) return;
+
+  console.log(`\n========== Starting transcription of ${pendingItems.length} video(s) ==========`);
+  pendingItems.forEach(item => {
+    console.log(`  - ${item.file.name} (${formatSize(item.file.size)})`);
+  });
 
   // Disable button
   transcribeAllBtn.disabled = true;

@@ -144,34 +144,57 @@ let currentSessionVideoIds = [];
 
 // Transcribe uploaded video using AssemblyAI
 app.post('/api/transcribe', upload.single('video'), async (req, res) => {
+  const startTime = Date.now();
+
   if (!req.file) {
+    console.log('[API] No file in request');
     return res.status(400).json({ error: 'No video file uploaded' });
   }
 
-  try {
-    console.log(`Transcribing: ${req.file.originalname}`);
+  const filename = req.file.originalname;
+  const fileSize = (req.file.size / (1024 * 1024)).toFixed(1);
+  console.log(`\n[API] ========== Received: ${filename} (${fileSize}MB) ==========`);
 
+  try {
     // Save video to database
+    console.log(`[API] [${filename}] Saving to database...`);
     const videoId = await saveVideo(
       req.file.originalname,
       req.file.size,
       req.file.mimetype
     );
     currentSessionVideoIds.push(videoId);
+    console.log(`[API] [${filename}] Saved to DB with ID: ${videoId}`);
+
+    // Upload and transcribe with AssemblyAI
+    console.log(`[API] [${filename}] Starting AssemblyAI transcription...`);
+    console.log(`[API] [${filename}] File path: ${req.file.path}`);
+    const transcribeStart = Date.now();
 
     const transcript = await assemblyai.transcripts.transcribe({
       audio: req.file.path
     });
 
+    const transcribeTime = ((Date.now() - transcribeStart) / 1000).toFixed(1);
+    console.log(`[API] [${filename}] AssemblyAI returned after ${transcribeTime}s`);
+    console.log(`[API] [${filename}] Status: ${transcript.status}`);
+    if (transcript.id) console.log(`[API] [${filename}] Transcript ID: ${transcript.id}`);
+
     // Clean up uploaded file
     unlinkSync(req.file.path);
+    console.log(`[API] [${filename}] Cleaned up temp file`);
 
     if (transcript.status === 'error') {
+      console.error(`[API] [${filename}] AssemblyAI error:`, transcript.error);
       throw new Error(transcript.error || 'Transcription failed');
     }
 
     // Save transcript to database
+    console.log(`[API] [${filename}] Saving transcript to DB (${transcript.text?.length || 0} chars)...`);
     await saveTranscript(videoId, transcript.text);
+
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[API] [${filename}] ✓ COMPLETE! Total time: ${totalTime}s`);
 
     res.json({
       filename: req.file.originalname,
@@ -179,7 +202,9 @@ app.post('/api/transcribe', upload.single('video'), async (req, res) => {
       videoId
     });
   } catch (error) {
-    console.error('Transcription error:', error);
+    const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.error(`[API] [${filename}] ✗ FAILED after ${totalTime}s:`, error.message);
+    console.error(`[API] [${filename}] Full error:`, error);
     // Clean up on error
     if (req.file?.path) {
       try { unlinkSync(req.file.path); } catch {}
