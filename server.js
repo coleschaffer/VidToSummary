@@ -80,6 +80,72 @@ const SUPADATA_API_KEY = process.env.SUPADATA_API_KEY;
 // RapidAPI for YouTube video downloads
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 
+// Translate transcript to English using Claude
+async function translateToEnglish(text, sourceLang) {
+  try {
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16000,
+      messages: [{
+        role: 'user',
+        content: `Translate the following transcript from ${sourceLang} to English. Provide only the translated text, maintaining the original formatting and structure. Do not add any explanations or notes.
+
+Transcript:
+${text}`
+      }]
+    });
+    return response.content[0].text;
+  } catch (error) {
+    console.error('[API] Translation error:', error.message);
+    // Return original text if translation fails
+    return text;
+  }
+}
+
+// Fetch transcript from Supadata with language preference
+async function fetchSupadataTranscript(url, lang) {
+  const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=${lang}`;
+  const response = await fetch(supadataUrl, {
+    method: 'GET',
+    headers: { 'x-api-key': SUPADATA_API_KEY }
+  });
+
+  // Handle async job (202 response)
+  if (response.status === 202) {
+    const { jobId } = await response.json();
+    console.log(`[API] Supadata job started: ${jobId}`);
+
+    let pollCount = 0;
+    const maxPolls = 120;
+    while (pollCount < maxPolls) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const pollResponse = await fetch(`https://api.supadata.ai/v1/transcript/${jobId}`, {
+        headers: { 'x-api-key': SUPADATA_API_KEY }
+      });
+      const pollData = await pollResponse.json();
+
+      if (pollData.status === 'completed') {
+        return { content: pollData.content, lang: pollData.lang };
+      } else if (pollData.status === 'failed') {
+        throw new Error('Supadata transcription failed');
+      }
+      pollCount++;
+    }
+    throw new Error('Transcript polling timed out');
+  }
+
+  // Handle errors
+  if (!response.ok) {
+    if (response.status === 206) throw new Error('No transcript available for this video');
+    if (response.status === 404) throw new Error('Video not found or is private');
+    if (response.status === 403) throw new Error('Video requires authentication or is restricted');
+    throw new Error(`Supadata API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return { content: data.content, lang: data.lang };
+}
+
 // IMPORTANT: Enable SharedArrayBuffer for FFmpeg.wasm
 app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
@@ -464,83 +530,32 @@ app.post('/api/youtube/transcript', async (req, res) => {
   console.log(`[API] Fetching YouTube transcript for: ${url}`);
 
   try {
-    // Call Supadata API (request English transcript by default)
-    const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=en`;
-    const response = await fetch(supadataUrl, {
-      method: 'GET',
-      headers: {
-        'x-api-key': SUPADATA_API_KEY
-      }
-    });
+    // Try to get English transcript (en first, then en-US fallback)
+    let result;
 
-    // Handle async job (202 response)
-    if (response.status === 202) {
-      const { jobId } = await response.json();
-      console.log(`[API] Supadata job started: ${jobId}`);
+    // First try with 'en'
+    console.log('[API] Trying transcript with lang=en');
+    result = await fetchSupadataTranscript(url, 'en');
+    console.log(`[API] Got transcript: ${result.content?.length || 0} chars, lang: ${result.lang}`);
 
-      // Poll for completion
-      let pollCount = 0;
-      const maxPolls = 120; // 2 minutes max
-      while (pollCount < maxPolls) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const pollResponse = await fetch(`https://api.supadata.ai/v1/transcript/${jobId}`, {
-          headers: { 'x-api-key': SUPADATA_API_KEY }
-        });
-        const pollData = await pollResponse.json();
-
-        if (pollData.status === 'completed') {
-          console.log(`[API] YouTube transcript complete: ${pollData.content?.length || 0} chars`);
-
-          // Extract video ID and fetch title
-          const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
-          let title = videoId;
-          try {
-            const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-            const oembedResponse = await fetch(oembedUrl);
-            if (oembedResponse.ok) {
-              const oembedData = await oembedResponse.json();
-              title = oembedData.title || videoId;
-            }
-          } catch (e) {
-            console.log(`[API] Could not fetch video title: ${e.message}`);
-          }
-
-          return res.json({
-            transcript: pollData.content,
-            lang: pollData.lang,
-            videoId: videoId,
-            title: title,
-            source: 'youtube'
-          });
-        } else if (pollData.status === 'failed') {
-          throw new Error('Supadata transcription failed');
+    // If not English, try en-US as fallback
+    if (result.lang && !result.lang.startsWith('en')) {
+      console.log('[API] Not English, trying lang=en-US fallback');
+      try {
+        const fallbackResult = await fetchSupadataTranscript(url, 'en-US');
+        if (fallbackResult.lang?.startsWith('en')) {
+          result = fallbackResult;
+          console.log(`[API] en-US fallback successful: ${result.content?.length || 0} chars`);
         }
-        pollCount++;
+      } catch (e) {
+        console.log('[API] en-US fallback failed, using original result');
       }
-      throw new Error('Transcript polling timed out');
     }
-
-    // Handle immediate response
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (response.status === 206) {
-        throw new Error('No transcript available for this video');
-      } else if (response.status === 404) {
-        throw new Error('Video not found or is private');
-      } else if (response.status === 403) {
-        throw new Error('Video requires authentication or is restricted');
-      }
-      throw new Error(`Supadata API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    console.log(`[API] YouTube transcript fetched: ${data.content?.length || 0} chars`);
 
     // Extract video ID and fetch title
     const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
     let title = videoId;
 
-    // Fetch video title using YouTube oEmbed (no API key needed)
     try {
       const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
       const oembedResponse = await fetch(oembedUrl);
@@ -552,9 +567,16 @@ app.post('/api/youtube/transcript', async (req, res) => {
       console.log(`[API] Could not fetch video title: ${e.message}`);
     }
 
+    // Translate to English if still not in English
+    let transcript = result.content;
+    if (result.lang && !result.lang.startsWith('en')) {
+      console.log(`[API] Translating transcript from ${result.lang} to English`);
+      transcript = await translateToEnglish(transcript, result.lang);
+    }
+
     res.json({
-      transcript: data.content,
-      lang: data.lang,
+      transcript: transcript,
+      lang: 'en',
       videoId: videoId,
       title: title,
       source: 'youtube'
