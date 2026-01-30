@@ -7,6 +7,8 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📹</text></svg>">
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -26,7 +28,7 @@
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
             <p>Drop video files here or <span class="browse-link">browse</span></p>
-            <span class="hint">MP4, WebM, MOV, MP3, WAV • Max 1GB per file</span>
+            <span class="hint">MP4, WebM, MOV, MP3, WAV • Audio extracted from video for faster upload</span>
           </div>
           <input type="file" id="fileInput" accept="video/*,audio/*" multiple hidden>
         </div>

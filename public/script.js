@@ -15,6 +15,110 @@ const presetBtns = document.querySelectorAll('.preset-btn');
 let uploadQueue = [];
 let transcriptions = [];
 
+// FFmpeg for audio extraction
+let ffmpeg = null;
+let ffmpegLoaded = false;
+let ffmpegLoading = false;
+
+async function loadFFmpeg() {
+  if (ffmpegLoaded) return true;
+  if (ffmpegLoading) {
+    // Wait for loading to complete
+    while (ffmpegLoading) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return ffmpegLoaded;
+  }
+
+  ffmpegLoading = true;
+  console.log('[FFmpeg] Loading...');
+
+  try {
+    const { FFmpeg } = FFmpegWASM;
+    const { fetchFile } = FFmpegUtil;
+    window.fetchFile = fetchFile;
+
+    ffmpeg = new FFmpeg();
+
+    ffmpeg.on('log', ({ message }) => {
+      console.log('[FFmpeg]', message);
+    });
+
+    ffmpeg.on('progress', ({ progress }) => {
+      const pct = Math.round(progress * 100);
+      console.log(`[FFmpeg] Progress: ${pct}%`);
+    });
+
+    await ffmpeg.load({
+      coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+    });
+
+    ffmpegLoaded = true;
+    console.log('[FFmpeg] Loaded successfully');
+    return true;
+  } catch (err) {
+    console.error('[FFmpeg] Failed to load:', err);
+    return false;
+  } finally {
+    ffmpegLoading = false;
+  }
+}
+
+// Extract audio from video file
+async function extractAudio(file, onProgress) {
+  const isVideo = file.type.startsWith('video/');
+  if (!isVideo) {
+    // Already audio, return as-is
+    return file;
+  }
+
+  // Load FFmpeg if needed
+  const loaded = await loadFFmpeg();
+  if (!loaded) {
+    console.warn('[FFmpeg] Not available, uploading original file');
+    return file;
+  }
+
+  console.log(`[FFmpeg] Extracting audio from ${file.name}...`);
+  if (onProgress) onProgress('extracting', 0);
+
+  try {
+    const inputName = 'input' + file.name.substring(file.name.lastIndexOf('.'));
+    const outputName = 'output.mp3';
+
+    // Write input file
+    await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+    // Extract audio (fast copy if possible, otherwise re-encode)
+    await ffmpeg.exec([
+      '-i', inputName,
+      '-vn',           // No video
+      '-acodec', 'libmp3lame',
+      '-q:a', '4',     // Good quality (~165 kbps)
+      '-y',            // Overwrite
+      outputName
+    ]);
+
+    // Read output
+    const data = await ffmpeg.readFile(outputName);
+    const audioBlob = new Blob([data.buffer], { type: 'audio/mp3' });
+    const audioFile = new File([audioBlob], file.name.replace(/\.[^/.]+$/, '.mp3'), { type: 'audio/mp3' });
+
+    // Cleanup
+    await ffmpeg.deleteFile(inputName);
+    await ffmpeg.deleteFile(outputName);
+
+    const reduction = ((1 - audioFile.size / file.size) * 100).toFixed(0);
+    console.log(`[FFmpeg] Extracted audio: ${formatSize(file.size)} → ${formatSize(audioFile.size)} (${reduction}% smaller)`);
+
+    if (onProgress) onProgress('extracting', 100);
+    return audioFile;
+  } catch (err) {
+    console.error('[FFmpeg] Extraction failed:', err);
+    return file; // Fall back to original
+  }
+}
+
 // Dropzone handlers
 dropzone.addEventListener('click', () => fileInput.click());
 
@@ -128,6 +232,7 @@ function formatSize(bytes) {
 
 function getStageLabel(stage) {
   switch (stage) {
+    case 'extracting': return 'Extracting audio';
     case 'uploading': return 'Uploading';
     case 'queued': return 'Queued';
     case 'transcribing': return 'Transcribing';
@@ -208,7 +313,9 @@ function uploadWithProgress(item) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
-    formData.append('video', item.file);
+    // Use extracted audio if available, otherwise original file
+    const fileToUpload = item.fileToUpload || item.file;
+    formData.append('video', fileToUpload, item.file.name);
 
     // Track upload progress
     xhr.upload.onprogress = (e) => {
@@ -279,21 +386,37 @@ async function pollTranscriptionStatus(item, jobId) {
 // Transcribe a single video with progress
 async function transcribeVideo(item) {
   const startTime = Date.now();
-  const fileSizeMB = item.file.size / (1024 * 1024);
-  console.log(`[${item.file.name}] Starting transcription... (${formatSize(item.file.size)})`);
-
-  // Warn about large files
-  if (fileSizeMB > 50) {
-    console.warn(`[${item.file.name}] Large file (${fileSizeMB.toFixed(0)}MB) - upload may take several minutes`);
-  }
+  const originalSize = item.file.size;
+  console.log(`[${item.file.name}] Starting transcription... (${formatSize(originalSize)})`);
 
   try {
-    // Step 1: Upload file
+    // Step 1: Extract audio from video (if it's a video)
+    let fileToUpload = item.file;
+
+    if (item.file.type.startsWith('video/')) {
+      item.stage = 'extracting';
+      item.progress = 0;
+      renderQueue();
+
+      console.log(`[${item.file.name}] Extracting audio...`);
+      fileToUpload = await extractAudio(item.file, (stage, progress) => {
+        item.stage = stage;
+        item.progress = progress;
+        renderQueue();
+      });
+
+      console.log(`[${item.file.name}] Audio extracted: ${formatSize(originalSize)} → ${formatSize(fileToUpload.size)}`);
+    }
+
+    // Store the file to upload for the upload function
+    item.fileToUpload = fileToUpload;
+
+    // Step 2: Upload file
     item.stage = 'uploading';
     item.progress = 0;
     renderQueue();
 
-    console.log(`[${item.file.name}] Uploading...`);
+    console.log(`[${item.file.name}] Uploading ${formatSize(fileToUpload.size)}...`);
     const uploadResult = await uploadWithProgress(item);
     console.log(`[${item.file.name}] Upload complete, job ID: ${uploadResult.jobId}`);
 
@@ -493,3 +616,10 @@ if (typeof marked === 'undefined') {
       .replace(/\n\n/g, '</p><p>')
   };
 }
+
+// Pre-load FFmpeg in the background
+setTimeout(() => {
+  loadFFmpeg().then(loaded => {
+    if (loaded) console.log('[FFmpeg] Pre-loaded and ready');
+  });
+}, 1000);
