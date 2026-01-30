@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - Video Transcriber</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📹</text></svg>">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #0a0a0b;
+      --surface: #141416;
+      --surface-2: #1c1c1f;
+      --border: #2a2a2e;
+      --text: #fafafa;
+      --text-muted: #71717a;
+      --primary: #6366f1;
+      --primary-hover: #818cf8;
+      --success: #22c55e;
+      --error: #ef4444;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+
+    /* Login Form */
+    .login-container {
+      max-width: 400px;
+      margin: 100px auto;
+      padding: 32px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .login-container h1 {
+      font-size: 1.5rem;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    .error-message {
+      color: var(--error);
+      font-size: 0.875rem;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      width: 100%;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn-secondary {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--primary);
+    }
+
+    .btn-sm {
+      padding: 8px 12px;
+      font-size: 0.75rem;
+    }
+
+    /* Dashboard */
+    .dashboard {
+      display: none;
+    }
+
+    .dashboard.visible {
+      display: block;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+    }
+
+    header h1 {
+      font-size: 1.5rem;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    /* Stats */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .stat-card h3 {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+
+    .stat-card .value {
+      font-size: 2rem;
+      font-weight: 600;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+    }
+
+    .tab-btn {
+      padding: 8px 16px;
+      font-size: 0.875rem;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+    }
+
+    .tab-btn.active {
+      background: var(--primary);
+      color: white;
+    }
+
+    /* Tables */
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.visible {
+      display: block;
+    }
+
+    .data-table {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .data-table table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .data-table th,
+    .data-table td {
+      padding: 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .data-table th {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: var(--surface-2);
+    }
+
+    .data-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .data-table tr:hover td {
+      background: var(--surface-2);
+    }
+
+    .data-table td {
+      font-size: 0.875rem;
+    }
+
+    .filename {
+      font-weight: 500;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .date {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .size {
+      color: var(--text-muted);
+    }
+
+    /* Transcript Preview */
+    .transcript-preview {
+      max-width: 400px;
+      max-height: 100px;
+      overflow: hidden;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Summary Card */
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .summary-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .summary-prompt {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      background: var(--surface-2);
+      padding: 4px 8px;
+      border-radius: 4px;
+      max-width: 70%;
+    }
+
+    .summary-text {
+      font-size: 0.875rem;
+      line-height: 1.7;
+      color: var(--text);
+      white-space: pre-wrap;
+    }
+
+    .summary-text h1, .summary-text h2, .summary-text h3 {
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px;
+      color: var(--text-muted);
+    }
+
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading {
+      text-align: center;
+      padding: 48px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Login Form -->
+  <div class="login-container" id="loginForm">
+    <h1>Admin Login</h1>
+    <div class="error-message" id="loginError">Invalid password</div>
+    <form id="loginFormElement">
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autofocus>
+      </div>
+      <button type="submit" class="btn btn-primary">Login</button>
+    </form>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="dashboard" id="dashboard">
+    <div class="container">
+      <header>
+        <h1>Admin Dashboard</h1>
+        <div class="header-actions">
+          <a href="/" class="btn btn-secondary btn-sm">Back to App</a>
+          <button class="btn btn-secondary btn-sm" id="logoutBtn">Logout</button>
+        </div>
+      </header>
+
+      <!-- Stats -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <h3>Total Videos</h3>
+          <div class="value" id="statVideos">-</div>
+        </div>
+        <div class="stat-card">
+          <h3>Transcripts</h3>
+          <div class="value" id="statTranscripts">-</div>
+        </div>
+        <div class="stat-card">
+          <h3>Summaries</h3>
+          <div class="value" id="statSummaries">-</div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="videos">Videos & Transcripts</button>
+        <button class="tab-btn" data-tab="summaries">Summaries</button>
+      </div>
+
+      <!-- Videos Tab -->
+      <div class="tab-content visible" id="videosTab">
+        <div class="loading" id="videosLoading">
+          <div class="spinner"></div>
+        </div>
+        <div class="data-table" id="videosTable" style="display: none;">
+          <table>
+            <thead>
+              <tr>
+                <th>Filename</th>
+                <th>Size</th>
+                <th>Date</th>
+                <th>Transcript</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="videosBody"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="videosEmpty" style="display: none;">
+          No videos uploaded yet
+        </div>
+      </div>
+
+      <!-- Summaries Tab -->
+      <div class="tab-content" id="summariesTab">
+        <div class="loading" id="summariesLoading">
+          <div class="spinner"></div>
+        </div>
+        <div id="summariesList"></div>
+        <div class="empty-state" id="summariesEmpty" style="display: none;">
+          No summaries generated yet
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const dashboard = document.getElementById('dashboard');
+    const loginFormElement = document.getElementById('loginFormElement');
+    const loginError = document.getElementById('loginError');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    // Check auth status on load
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/admin/check');
+        const data = await res.json();
+        if (data.authenticated) {
+          showDashboard();
+        }
+      } catch (error) {
+        console.error('Auth check failed:', error);
+      }
+    }
+
+    // Login
+    loginFormElement.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = document.getElementById('password').value;
+
+      try {
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        if (res.ok) {
+          showDashboard();
+        } else {
+          loginError.style.display = 'block';
+        }
+      } catch (error) {
+        loginError.style.display = 'block';
+      }
+    });
+
+    // Logout
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      loginForm.style.display = 'block';
+      dashboard.classList.remove('visible');
+      document.getElementById('password').value = '';
+    });
+
+    // Show dashboard
+    function showDashboard() {
+      loginForm.style.display = 'none';
+      dashboard.classList.add('visible');
+      loadStats();
+      loadVideos();
+      loadSummaries();
+    }
+
+    // Load stats
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/admin/stats');
+        const stats = await res.json();
+        document.getElementById('statVideos').textContent = stats.totalVideos;
+        document.getElementById('statTranscripts').textContent = stats.totalTranscripts;
+        document.getElementById('statSummaries').textContent = stats.totalSummaries;
+      } catch (error) {
+        console.error('Failed to load stats:', error);
+      }
+    }
+
+    // Format file size
+    function formatSize(bytes) {
+      if (!bytes) return '-';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    // Format date
+    function formatDate(dateStr) {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    }
+
+    // Load videos
+    async function loadVideos() {
+      try {
+        const res = await fetch('/api/admin/videos');
+        const videos = await res.json();
+
+        document.getElementById('videosLoading').style.display = 'none';
+
+        if (videos.length === 0) {
+          document.getElementById('videosEmpty').style.display = 'block';
+          return;
+        }
+
+        document.getElementById('videosTable').style.display = 'block';
+        const tbody = document.getElementById('videosBody');
+        tbody.innerHTML = videos.map(v => `
+          <tr>
+            <td class="filename">${v.filename}</td>
+            <td class="size">${formatSize(v.file_size)}</td>
+            <td class="date">${formatDate(v.created_at)}</td>
+            <td>
+              <div class="transcript-preview">
+                ${v.transcript_text ? v.transcript_text.substring(0, 200) + '...' : 'No transcript'}
+              </div>
+            </td>
+            <td>
+              ${v.transcript_text ? `
+                <a href="/api/admin/transcript/${v.id}/download" class="btn btn-secondary btn-sm">
+                  Download .txt
+                </a>
+              ` : '-'}
+            </td>
+          </tr>
+        `).join('');
+      } catch (error) {
+        console.error('Failed to load videos:', error);
+        document.getElementById('videosLoading').innerHTML = '<p style="color: var(--error);">Failed to load videos</p>';
+      }
+    }
+
+    // Load summaries
+    async function loadSummaries() {
+      try {
+        const res = await fetch('/api/admin/summaries');
+        const summaries = await res.json();
+
+        document.getElementById('summariesLoading').style.display = 'none';
+
+        if (summaries.length === 0) {
+          document.getElementById('summariesEmpty').style.display = 'block';
+          return;
+        }
+
+        const list = document.getElementById('summariesList');
+        list.innerHTML = summaries.map(s => `
+          <div class="summary-card">
+            <div class="summary-card-header">
+              <div class="summary-prompt">${s.prompt.substring(0, 100)}${s.prompt.length > 100 ? '...' : ''}</div>
+              <div class="date">${formatDate(s.created_at)}</div>
+            </div>
+            <div class="summary-text">${s.summary_text}</div>
+          </div>
+        `).join('');
+      } catch (error) {
+        console.error('Failed to load summaries:', error);
+        document.getElementById('summariesLoading').innerHTML = '<p style="color: var(--error);">Failed to load summaries</p>';
+      }
+    }
+
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('visible'));
+        btn.classList.add('active');
+        document.getElementById(`${btn.dataset.tab}Tab`).classList.add('visible');
+      });
+    });
+
+    // Init
+    checkAuth();
+  </script>
+</body>
+</html>

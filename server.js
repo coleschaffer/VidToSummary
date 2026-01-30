@@ -6,6 +6,8 @@ import { unlinkSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
+import { initDb, saveVideo, saveTranscript, saveSummary, getVideos, getSummaries, getStats, getTranscript } from './db.js';
 
 dotenv.config();
 
@@ -14,6 +16,10 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '2323';
+
+// Initialize database
+initDb().catch(console.error);
 
 // Ensure uploads directory exists
 const uploadsDir = join(__dirname, 'uploads');
@@ -44,6 +50,97 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 app.use(express.static(join(__dirname, 'public')));
 app.use(express.json());
+app.use(cookieParser());
+
+// Admin authentication middleware
+function requireAdmin(req, res, next) {
+  const authCookie = req.cookies.admin_auth;
+  if (authCookie === ADMIN_PASSWORD) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Unauthorized' });
+  }
+}
+
+// Admin login
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  if (password === ADMIN_PASSWORD) {
+    res.cookie('admin_auth', password, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Invalid password' });
+  }
+});
+
+// Admin logout
+app.post('/api/admin/logout', (req, res) => {
+  res.clearCookie('admin_auth');
+  res.json({ success: true });
+});
+
+// Check admin auth status
+app.get('/api/admin/check', (req, res) => {
+  const authCookie = req.cookies.admin_auth;
+  res.json({ authenticated: authCookie === ADMIN_PASSWORD });
+});
+
+// Admin stats
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    const stats = await getStats();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin get all videos with transcripts
+app.get('/api/admin/videos', requireAdmin, async (req, res) => {
+  try {
+    const videos = await getVideos();
+    res.json(videos);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin get all summaries
+app.get('/api/admin/summaries', requireAdmin, async (req, res) => {
+  try {
+    const summaries = await getSummaries();
+    res.json(summaries);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download transcript as text file
+app.get('/api/admin/transcript/:videoId/download', requireAdmin, async (req, res) => {
+  try {
+    const transcript = await getTranscript(parseInt(req.params.videoId));
+    if (!transcript) {
+      return res.status(404).json({ error: 'Transcript not found' });
+    }
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="transcript-${req.params.videoId}.txt"`);
+    res.send(transcript);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Serve admin page
+app.get('/admin', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'admin.html'));
+});
+
+// Track video IDs for current session (for linking summaries)
+let currentSessionVideoIds = [];
 
 // Transcribe uploaded video using AssemblyAI
 app.post('/api/transcribe', upload.single('video'), async (req, res) => {
@@ -53,6 +150,14 @@ app.post('/api/transcribe', upload.single('video'), async (req, res) => {
 
   try {
     console.log(`Transcribing: ${req.file.originalname}`);
+
+    // Save video to database
+    const videoId = await saveVideo(
+      req.file.originalname,
+      req.file.size,
+      req.file.mimetype
+    );
+    currentSessionVideoIds.push(videoId);
 
     const transcript = await assemblyai.transcripts.transcribe({
       audio: req.file.path
@@ -65,9 +170,13 @@ app.post('/api/transcribe', upload.single('video'), async (req, res) => {
       throw new Error(transcript.error || 'Transcription failed');
     }
 
+    // Save transcript to database
+    await saveTranscript(videoId, transcript.text);
+
     res.json({
       filename: req.file.originalname,
-      transcription: transcript.text
+      transcription: transcript.text,
+      videoId
     });
   } catch (error) {
     console.error('Transcription error:', error);
@@ -81,7 +190,7 @@ app.post('/api/transcribe', upload.single('video'), async (req, res) => {
 
 // Summarize transcription with custom prompt using Claude Opus 4.5
 app.post('/api/summarize', async (req, res) => {
-  const { transcription, prompt } = req.body;
+  const { transcription, prompt, videoIds } = req.body;
 
   if (!transcription || !prompt) {
     return res.status(400).json({ error: 'Transcription and prompt required' });
@@ -100,7 +209,15 @@ app.post('/api/summarize', async (req, res) => {
       ]
     });
 
-    res.json({ summary: message.content[0].text });
+    const summaryText = message.content[0].text;
+
+    // Save summary to database
+    const idsToSave = videoIds || currentSessionVideoIds;
+    if (idsToSave.length > 0) {
+      await saveSummary(prompt, summaryText, idsToSave);
+    }
+
+    res.json({ summary: summaryText });
   } catch (error) {
     console.error('Summarization error:', error);
     res.status(500).json({ error: 'Summarization failed: ' + error.message });
