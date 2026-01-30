@@ -77,6 +77,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Supadata API for YouTube transcripts
 const SUPADATA_API_KEY = process.env.SUPADATA_API_KEY;
 
+// RapidAPI for YouTube video downloads
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+
 // IMPORTANT: Enable SharedArrayBuffer for FFmpeg.wasm
 app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
@@ -562,7 +565,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
-// YouTube video download endpoint - uses Cobalt API and proxies through server
+// YouTube video download endpoint - uses RapidAPI YouTube Media Downloader
 app.get('/api/youtube/download/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
@@ -570,39 +573,49 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  if (!RAPIDAPI_KEY) {
+    return res.status(500).json({ error: 'Video download service not configured' });
+  }
 
   try {
     console.log(`[API] Requesting video download for: ${videoId}`);
 
-    // Use Cobalt API to get download URL
-    const cobaltResponse = await fetch('https://api.cobalt.tools/', {
-      method: 'POST',
+    // Get video details from RapidAPI
+    const apiUrl = `https://youtube-media-downloader.p.rapidapi.com/v2/video/details?videoId=${videoId}`;
+    const apiResponse = await fetch(apiUrl, {
+      method: 'GET',
       headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        url: youtubeUrl,
-        videoQuality: '720',
-        filenameStyle: 'basic'
-      })
+        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
+        'x-rapidapi-key': RAPIDAPI_KEY
+      }
     });
 
-    const data = await cobaltResponse.json();
-    console.log('[API] Cobalt response status:', data.status);
+    if (!apiResponse.ok) {
+      throw new Error(`RapidAPI error: ${apiResponse.status}`);
+    }
 
+    const data = await apiResponse.json();
+    console.log('[API] RapidAPI response received for:', videoId);
+
+    // Find a suitable video format (prefer 720p mp4)
     let downloadUrl;
-    if (data.status === 'redirect' || data.status === 'stream') {
-      downloadUrl = data.url;
-    } else if (data.status === 'picker' && data.picker?.length > 0) {
-      const videoOption = data.picker.find(p => p.type === 'video') || data.picker[0];
-      downloadUrl = videoOption.url;
-    } else if (data.status === 'error') {
-      console.error('[API] Cobalt error:', data.error);
-      return res.status(400).json({ error: data.error?.code || 'Download failed' });
-    } else {
-      return res.status(400).json({ error: 'Could not get download URL' });
+    let filename = `${videoId}.mp4`;
+
+    if (data.videos?.items && data.videos.items.length > 0) {
+      // Look for 720p first, then fall back to other qualities
+      const video = data.videos.items.find(v => v.quality === '720p' && v.extension === 'mp4')
+        || data.videos.items.find(v => v.extension === 'mp4')
+        || data.videos.items[0];
+
+      downloadUrl = video.url;
+      if (data.title) {
+        const safeTitle = data.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
+        filename = `${safeTitle}.${video.extension || 'mp4'}`;
+      }
+    }
+
+    if (!downloadUrl) {
+      return res.status(404).json({ error: 'No download URL available for this video' });
     }
 
     console.log('[API] Proxying video download for:', videoId);
@@ -614,9 +627,6 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
       throw new Error(`Failed to fetch video: ${videoResponse.status}`);
     }
 
-    // Get filename from Cobalt or use videoId
-    const filename = data.filename || `${videoId}.mp4`;
-
     // Set response headers
     res.setHeader('Content-Type', videoResponse.headers.get('content-type') || 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -625,22 +635,8 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     }
 
     // Stream the video to the client
-    const reader = videoResponse.body.getReader();
-    const stream = new ReadableStream({
-      async start(controller) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(value);
-        }
-        controller.close();
-      }
-    });
-
-    // Convert Web ReadableStream to Node.js stream and pipe to response
     const nodeStream = await import('stream');
-    const webStream = await import('stream/web');
-    const readable = nodeStream.Readable.fromWeb(stream);
+    const readable = nodeStream.Readable.fromWeb(videoResponse.body);
     readable.pipe(res);
 
   } catch (error) {
