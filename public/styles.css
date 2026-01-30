@@ -832,14 +832,9 @@ h3 {
 }
 
 .btn-icon.success {
-  background: var(--success);
+  background: rgba(34, 197, 94, 0.15);
   border-color: var(--success);
-  color: white;
-  transform: scale(1.1);
-}
-
-.btn-icon {
-  transition: all 0.2s ease;
+  color: var(--success);
 }
 
 .btn-icon-text.success {
