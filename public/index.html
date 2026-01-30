@@ -7,11 +7,38 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📹</text></svg>">
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <!-- FFmpeg loaded from local to avoid CORS issues with Workers -->
   <script src="/ffmpeg/ffmpeg.min.js"></script>
   <script src="/ffmpeg/util.min.js"></script>
 </head>
 <body>
+  <!-- History Sidebar -->
+  <aside class="history-sidebar" id="historySidebar">
+    <div class="sidebar-header">
+      <h2>History</h2>
+      <button class="sidebar-close" id="closeSidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sidebar-content" id="historyList">
+      <p class="empty-history">No history yet. Complete a transcription to see it here.</p>
+    </div>
+    <div class="sidebar-footer">
+      <button class="btn-text" id="clearHistory">Clear History</button>
+    </div>
+  </aside>
+
+  <!-- History Toggle Button -->
+  <button class="history-toggle" id="historyToggle" title="View History">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/>
+      <polyline points="12 6 12 12 16 14"/>
+    </svg>
+  </button>
+
   <div class="container">
     <header>
       <h1>Video Transcriber</h1>
@@ -84,7 +111,7 @@
 
         <!-- Summary Output -->
         <div class="summary-section" id="summarySection">
-          <h3>Summary</h3>
+          <h3>Results</h3>
           <div class="summary-content" id="summaryContent"></div>
         </div>
       </section>

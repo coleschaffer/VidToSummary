@@ -8,6 +8,22 @@ import { dirname, join } from 'path';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import { initDb, saveVideo, saveTranscript, saveSummary, getVideos, getSummaries, getStats, getTranscript } from './db.js';
+import {
+  CONFIG,
+  getSessionId,
+  getGlobalStats,
+  getUserStats,
+  canUserAddJob,
+  canUserStartJob,
+  registerJob,
+  updateJobStatus,
+  completeJob,
+  failJob,
+  getJob,
+  removeJob,
+  startCleanupIntervals,
+  rateLimitMiddleware
+} from './lib/queue.js';
 
 dotenv.config();
 
@@ -31,6 +47,9 @@ const uploadsDir = join(__dirname, 'uploads');
 if (!existsSync(uploadsDir)) {
   mkdirSync(uploadsDir, { recursive: true });
 }
+
+// Start cleanup intervals
+startCleanupIntervals(uploadsDir);
 
 // Configure multer for video uploads
 const storage = multer.diskStorage({
@@ -56,7 +75,6 @@ const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // IMPORTANT: Enable SharedArrayBuffer for FFmpeg.wasm
-// These headers allow client-side audio extraction from videos
 app.use((req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -114,8 +132,9 @@ app.get('/api/admin/check', (req, res) => {
 // Admin stats
 app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   try {
-    const stats = await getStats();
-    res.json(stats);
+    const dbStats = await getStats();
+    const queueStats = getGlobalStats();
+    res.json({ ...dbStats, queue: queueStats });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -161,43 +180,57 @@ app.get('/admin', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'admin.html'));
 });
 
-// Track video IDs for current session (for linking summaries)
-let currentSessionVideoIds = [];
+// Get queue status for current user
+app.get('/api/queue/status', (req, res) => {
+  const sessionId = getSessionId(req, res);
+  res.json({
+    global: getGlobalStats(),
+    user: getUserStats(sessionId),
+    limits: {
+      maxGlobalConcurrent: CONFIG.MAX_GLOBAL_CONCURRENT,
+      maxUserConcurrent: CONFIG.MAX_USER_CONCURRENT,
+      maxUserQueue: CONFIG.MAX_USER_QUEUE,
+    }
+  });
+});
 
 // Track active transcriptions for progress polling
 const activeTranscriptions = new Map();
 
 // Start transcription - returns job ID for progress polling
-app.post('/api/transcribe/start', (req, res, next) => {
+app.post('/api/transcribe/start', rateLimitMiddleware, (req, res, next) => {
   const contentLength = req.headers['content-length'];
   console.log(`[API] /api/transcribe/start - Upload starting... Content-Length: ${contentLength}`);
   next();
 }, upload.single('video'), async (req, res) => {
   console.log(`[API] /api/transcribe/start - Upload complete, processing...`);
-  console.log(`[API] Request body keys:`, Object.keys(req.body || {}));
   console.log(`[API] File received:`, req.file ? `${req.file.originalname} (${req.file.size} bytes)` : 'NONE');
 
   if (!req.file) {
-    console.log(`[API] /api/transcribe/start - No file received! Headers:`, JSON.stringify(req.headers).substring(0, 500));
+    console.log(`[API] /api/transcribe/start - No file received!`);
     return res.status(400).json({ error: 'No video file uploaded' });
   }
 
+  const sessionId = req.sessionId;
   const filename = req.file.originalname;
   const fileSize = (req.file.size / (1024 * 1024)).toFixed(1);
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-  console.log(`\n[API] ========== Starting job ${jobId}: ${filename} (${fileSize}MB) ==========`);
+  console.log(`\n[API] ========== Starting job ${jobId}: ${filename} (${fileSize}MB) [User: ${sessionId}] ==========`);
 
   try {
+    // Register job with queue manager
+    registerJob(jobId, sessionId, filename);
+
     // Save video to database
     const videoId = await saveVideo(req.file.originalname, req.file.size, req.file.mimetype);
-    currentSessionVideoIds.push(videoId);
     console.log(`[API] [${jobId}] Saved to DB with videoId: ${videoId}`);
 
     // Initialize job tracking
     activeTranscriptions.set(jobId, {
       filename,
       videoId,
+      sessionId,
       filePath: req.file.path,
       stage: 'uploading',
       progress: 0,
@@ -205,12 +238,16 @@ app.post('/api/transcribe/start', (req, res, next) => {
       startTime: Date.now()
     });
 
+    // Update queue status
+    updateJobStatus(jobId, 'processing');
+
     // Start async transcription process
     processTranscription(jobId);
 
     res.json({ jobId, videoId, filename });
   } catch (error) {
     console.error(`[API] [${jobId}] Failed to start:`, error);
+    failJob(jobId, error);
     if (req.file?.path) {
       try { unlinkSync(req.file.path); } catch {}
     }
@@ -260,20 +297,17 @@ async function processTranscription(jobId) {
       } else if (transcript.status === 'error') {
         throw new Error(transcript.error || 'Transcription failed');
       } else {
-        // Processing - estimate progress based on status
         if (transcript.status === 'queued') {
           job.stage = 'queued';
           job.progress = 0;
         } else if (transcript.status === 'processing') {
           job.stage = 'transcribing';
-          // AssemblyAI doesn't give percent, so estimate based on time
           const elapsed = (Date.now() - job.startTime) / 1000;
-          // Rough estimate: assume 1 minute per 10MB of video
           const estimatedTotal = (job.progress || 30) + Math.min(elapsed / 3, 95);
           job.progress = Math.min(Math.round(estimatedTotal), 95);
         }
         console.log(`[API] [${jobId}] Status: ${transcript.status}, progress: ${job.progress}%`);
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Poll every 3 seconds
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
 
@@ -286,6 +320,9 @@ async function processTranscription(jobId) {
     job.progress = 100;
     job.transcription = transcript.text;
 
+    // Update queue manager
+    completeJob(jobId, { transcription: transcript.text });
+
     const totalTime = ((Date.now() - job.startTime) / 1000).toFixed(1);
     console.log(`[API] [${jobId}] ✓ COMPLETE! Total time: ${totalTime}s, ${transcript.text?.length || 0} chars`);
 
@@ -293,7 +330,7 @@ async function processTranscription(jobId) {
     console.error(`[API] [${jobId}] ✗ FAILED:`, error.message);
     job.status = 'error';
     job.error = error.message;
-    // Clean up file if still exists
+    failJob(jobId, error);
     if (job.filePath) {
       try { unlinkSync(job.filePath); } catch {}
     }
@@ -319,18 +356,23 @@ app.get('/api/transcribe/status/:jobId', (req, res) => {
 
   if (job.status === 'completed') {
     response.transcription = job.transcription;
-    // Clean up job after client retrieves result
-    setTimeout(() => activeTranscriptions.delete(req.params.jobId), 60000);
+    setTimeout(() => {
+      activeTranscriptions.delete(req.params.jobId);
+      removeJob(req.params.jobId);
+    }, 60000);
   } else if (job.status === 'error') {
     response.error = job.error;
-    setTimeout(() => activeTranscriptions.delete(req.params.jobId), 60000);
+    setTimeout(() => {
+      activeTranscriptions.delete(req.params.jobId);
+      removeJob(req.params.jobId);
+    }, 60000);
   }
 
   res.json(response);
 });
 
 // Legacy endpoint for backwards compatibility
-app.post('/api/transcribe', upload.single('video'), async (req, res) => {
+app.post('/api/transcribe', rateLimitMiddleware, upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No video file uploaded' });
   }
@@ -340,7 +382,6 @@ app.post('/api/transcribe', upload.single('video'), async (req, res) => {
 
   try {
     const videoId = await saveVideo(req.file.originalname, req.file.size, req.file.mimetype);
-    currentSessionVideoIds.push(videoId);
 
     const transcript = await assemblyai.transcripts.transcribe({ audio: req.file.path });
     unlinkSync(req.file.path);
@@ -385,9 +426,8 @@ app.post('/api/summarize', async (req, res) => {
     const summaryText = message.content[0].text;
 
     // Save summary to database
-    const idsToSave = videoIds || currentSessionVideoIds;
-    if (idsToSave.length > 0) {
-      await saveSummary(prompt, summaryText, idsToSave);
+    if (videoIds && videoIds.length > 0) {
+      await saveSummary(prompt, summaryText, videoIds);
     }
 
     res.json({ summary: summaryText });
@@ -400,9 +440,10 @@ app.post('/api/summarize', async (req, res) => {
 // Create server with extended timeout for large uploads
 const server = app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Queue limits: Global=${CONFIG.MAX_GLOBAL_CONCURRENT}, Per-user=${CONFIG.MAX_USER_CONCURRENT}, Queue=${CONFIG.MAX_USER_QUEUE}`);
 });
 
 // Increase timeout to 10 minutes for large file uploads
-server.timeout = 600000; // 10 minutes
+server.timeout = 600000;
 server.keepAliveTimeout = 600000;
 server.headersTimeout = 600000;
