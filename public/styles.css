@@ -581,6 +581,11 @@ h3 {
   letter-spacing: 0.05em;
 }
 
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
 .transcription-text {
   font-size: 0.875rem;
   line-height: 1.7;

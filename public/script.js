@@ -552,9 +552,12 @@ transcribeAllBtn.addEventListener('click', async () => {
 function renderResults() {
   if (!transcriptions.length) { resultsSection.classList.remove('visible'); return; }
   resultsSection.classList.add('visible');
-  const downloadAllBtn = transcriptions.length > 1 ? `<button class="btn-icon-text" onclick="downloadAllTranscriptsZip(event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download All</button>` : '';
+  const hasMultiple = transcriptions.length > 1;
+  const youtubeVideos = transcriptions.filter(t => t.source === 'youtube' && t.videoId);
+  const downloadTranscriptsBtn = hasMultiple ? `<button class="btn-icon-text" onclick="downloadAllTranscriptsZip(event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download Transcripts</button>` : '';
+  const downloadVideosBtn = youtubeVideos.length > 0 ? `<button class="btn-icon-text" onclick="downloadAllVideos(event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg>Download Videos</button>` : '';
   resultsList.innerHTML = `
-    <div class="results-header"><span class="results-count">${transcriptions.length} transcription${transcriptions.length > 1 ? 's' : ''}</span>${downloadAllBtn}</div>
+    <div class="results-header"><span class="results-count">${transcriptions.length} transcription${transcriptions.length > 1 ? 's' : ''}</span><div class="header-buttons">${downloadTranscriptsBtn}${downloadVideosBtn}</div></div>
     ${transcriptions.map((item, i) => `
     <div class="result-item ${i === 0 ? 'expanded' : ''}" data-index="${i}">
       <div class="result-header" onclick="toggleResult(${i})">
@@ -690,6 +693,39 @@ window.downloadAllSummariesZip = async function(event) {
   URL.revokeObjectURL(a.href);
   showSuccess(btn);
   btn.disabled = false;
+};
+
+window.downloadAllVideos = async function(event) {
+  event.stopPropagation();
+  const btn = event.currentTarget;
+  const originalHTML = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>Downloading...';
+
+  const youtubeVideos = transcriptions.filter(t => t.source === 'youtube' && t.videoId);
+
+  // Download videos sequentially with a small delay to avoid overwhelming the browser
+  for (let i = 0; i < youtubeVideos.length; i++) {
+    const video = youtubeVideos[i];
+    const a = document.createElement('a');
+    a.href = `/api/youtube/download/${video.videoId}`;
+    a.download = `${video.filename}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // Wait a bit between downloads to let browser handle them
+    if (i < youtubeVideos.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  // Restore button after all downloads started
+  setTimeout(() => {
+    btn.innerHTML = originalHTML;
+    btn.disabled = false;
+    showSuccess(btn);
+  }, 1500);
 };
 
 // ==================== PROMPTS ====================
