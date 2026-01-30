@@ -799,8 +799,19 @@ app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
 
     // Download the full video to temp file
     console.log('[API] Downloading source video...');
-    const videoResponse = await fetch(downloadUrl);
+    console.log('[API] Download URL:', downloadUrl.substring(0, 100) + '...');
+
+    const videoResponse = await fetch(downloadUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.youtube.com/'
+      }
+    });
+
     if (!videoResponse.ok) {
+      console.error('[API] Video fetch failed:', videoResponse.status, videoResponse.statusText);
       throw new Error(`Failed to fetch video: ${videoResponse.status}`);
     }
 
