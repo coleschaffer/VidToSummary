@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Transcriber</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Video Transcriber</h1>
+      <p class="subtitle">Upload videos, get transcriptions, run AI prompts</p>
+    </header>
+
+    <main>
+      <!-- Upload Section -->
+      <section class="upload-section">
+        <div class="dropzone" id="dropzone">
+          <div class="dropzone-content">
+            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>Drop video files here or <span class="browse-link">browse</span></p>
+            <span class="hint">MP4, WebM, MOV, MP3, WAV • Max 100MB</span>
+          </div>
+          <input type="file" id="fileInput" accept="video/*,audio/*" multiple hidden>
+        </div>
+      </section>
+
+      <!-- Queue Section -->
+      <section class="queue-section" id="queueSection">
+        <h2>Upload Queue</h2>
+        <div class="queue-list" id="queueList"></div>
+        <button class="btn btn-primary" id="transcribeAll">
+          <span>Transcribe All</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+        </button>
+      </section>
+
+      <!-- Results Section -->
+      <section class="results-section" id="resultsSection">
+        <h2>Transcriptions</h2>
+        <div class="results-list" id="resultsList"></div>
+
+        <!-- Prompt Section -->
+        <div class="prompt-section" id="promptSection">
+          <h3>Run a Prompt</h3>
+          <div class="prompt-presets">
+            <button class="preset-btn active" data-prompt="Summarize this lesson for students. Include: key takeaways, main concepts covered, and action items. Format with headers and bullet points.">
+              Lesson Summary
+            </button>
+            <button class="preset-btn" data-prompt="Extract all key quotes and important statements from this transcript.">
+              Key Quotes
+            </button>
+            <button class="preset-btn" data-prompt="Create a brief outline of the topics covered in this video, organized hierarchically.">
+              Topic Outline
+            </button>
+            <button class="preset-btn" data-prompt="Generate 5 quiz questions based on the content of this transcript.">
+              Quiz Questions
+            </button>
+          </div>
+          <textarea id="promptInput" placeholder="Enter your prompt here...">Summarize this lesson for students. Include: key takeaways, main concepts covered, and action items. Format with headers and bullet points.</textarea>
+          <button class="btn btn-primary" id="runPrompt">
+            <span>Run Prompt</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Summary Output -->
+        <div class="summary-section" id="summarySection">
+          <h3>Summary</h3>
+          <div class="summary-content" id="summaryContent"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
