@@ -982,19 +982,10 @@ window.downloadClips = async function() {
   };
 
   try {
-    // Step 1: Get video URL from server
-    updateStatus('Getting video URL...');
-    const urlResponse = await fetch(`/api/youtube/video-url/${clipModalVideoId}`);
-    if (!urlResponse.ok) {
-      const error = await urlResponse.json();
-      throw new Error(error.error || 'Failed to get video URL');
-    }
-    const videoInfo = await urlResponse.json();
-    console.log('[Clips] Got video URL:', videoInfo.url.substring(0, 50) + '...');
-
-    // Step 2: Download video in browser
+    // Step 1: Download video through our server (bypasses CORS)
     updateStatus('Downloading video...');
-    const videoResponse = await fetch(videoInfo.url);
+    console.log('[Clips] Downloading video via server proxy...');
+    const videoResponse = await fetch(`/api/youtube/download/${clipModalVideoId}`);
     if (!videoResponse.ok) {
       throw new Error('Failed to download video');
     }
