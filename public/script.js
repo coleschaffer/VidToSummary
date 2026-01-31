@@ -99,21 +99,21 @@ function renderSavedPrompts() {
   const prompts = getSavedPrompts();
 
   container.innerHTML = prompts.map(p => `
-    <button class="saved-prompt-btn" data-id="${p.id}" data-prompt="${p.prompt.replace(/"/g, '&quot;')}" title="${p.prompt.substring(0, 100)}...">
-      ${p.name}
-      <div class="prompt-actions">
-        <button class="prompt-action-btn edit" onclick="editSavedPrompt('${p.id}'); event.stopPropagation();" title="Rename">
+    <div class="saved-prompt-btn" data-id="${p.id}" data-prompt="${p.prompt.replace(/"/g, '&quot;')}" title="${p.prompt.substring(0, 100)}...">
+      <span class="prompt-name">${p.name}</span>
+      <span class="prompt-actions">
+        <span class="prompt-action-btn edit" onclick="editSavedPrompt('${p.id}'); event.stopPropagation();" title="Rename">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
           </svg>
-        </button>
-        <button class="prompt-action-btn delete" onclick="deleteSavedPrompt('${p.id}'); event.stopPropagation();" title="Delete">
+        </span>
+        <span class="prompt-action-btn delete" onclick="deleteSavedPrompt('${p.id}'); event.stopPropagation();" title="Delete">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
           </svg>
-        </button>
-      </div>
-    </button>
+        </span>
+      </span>
+    </div>
   `).join('');
 
   // Add click listeners for saved prompts
