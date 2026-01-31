@@ -153,7 +153,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // Add listener for New Prompt button
   const newPromptBtn = document.getElementById('newPromptBtn');
   if (newPromptBtn) {
-    newPromptBtn.addEventListener('click', () => {
+    newPromptBtn.addEventListener('click', (e) => {
+      // Ignore clicks on action buttons
+      if (e.target.closest('.new-prompt-actions')) return;
+
+      // Clear prompt and show placeholder
+      promptInput.value = '';
+      promptInput.placeholder = 'Your prompt goes here...';
+      promptInput.focus();
+
+      // Deselect all preset and saved buttons, activate New
+      document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
+      newPromptBtn.classList.add('active');
+    });
+  }
+
+  // Edit (save) button inside New - saves the current prompt
+  const editNewPromptBtn = document.getElementById('editNewPromptBtn');
+  if (editNewPromptBtn) {
+    editNewPromptBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
       const currentPrompt = promptInput.value.trim();
       if (!currentPrompt) {
         alert('Please enter a prompt first');
@@ -168,6 +187,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       savePrompt(currentPrompt);
+      newPromptBtn.classList.remove('active');
+    });
+  }
+
+  // Delete (clear) button inside New - clears the prompt
+  const deleteNewPromptBtn = document.getElementById('deleteNewPromptBtn');
+  if (deleteNewPromptBtn) {
+    deleteNewPromptBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      promptInput.value = '';
+      promptInput.placeholder = 'Your prompt goes here...';
     });
   }
 });
@@ -906,7 +936,7 @@ function renderResults() {
           <button class="btn-icon" onclick="copyText(${i}, 'transcript', event)" title="Copy"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
           <button class="btn-icon" onclick="downloadText(${i}, 'transcript', event)" title="Download Transcript"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
           ${item.source === 'youtube' && item.videoId ? `<button class="btn-icon" onclick="downloadVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button><button class="btn-icon" onclick="openClipModal(${i}, event)" title="Create Clips"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
-          ${item.source === 'metaads' && item.videoId ? `<button class="btn-icon" onclick="downloadMetaAdVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
+          ${item.source === 'metaads' && item.videoId ? `<button class="btn-icon" onclick="downloadMetaAdVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button><button class="btn-icon" onclick="openClipModal(${i}, event)" title="Create Clips"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
         </div>
         <div class="transcription-text">${item.transcription}</div>
       </div>
@@ -1318,6 +1348,7 @@ setTimeout(() => loadFFmpeg().then(loaded => { if (loaded) console.log('[FFmpeg]
 // ==================== CLIP MODAL ====================
 let clipModalVideoId = null;
 let clipModalVideoTitle = '';
+let clipModalSource = null; // 'youtube' or 'metaads'
 
 // Create modal HTML and append to body
 const clipModalHTML = `
@@ -1371,6 +1402,7 @@ window.openClipModal = function(index, event) {
 
   clipModalVideoId = item.videoId;
   clipModalVideoTitle = item.filename;
+  clipModalSource = item.source || 'youtube';
   document.getElementById('clipModalTitle').textContent = item.filename;
 
   // Reset to single clip range
@@ -1400,6 +1432,7 @@ window.openClipModal = function(index, event) {
 window.closeClipModal = function() {
   document.getElementById('clipModal').style.display = 'none';
   clipModalVideoId = null;
+  clipModalSource = null;
 };
 
 window.addClipRange = function() {
@@ -1492,11 +1525,40 @@ window.downloadClips = async function() {
     // Step 1: Download video through our server (bypasses CORS)
     updateStatus('Downloading video...');
     console.log('[Clips] Downloading video via server proxy...');
-    const videoResponse = await fetch(`/api/youtube/download/${clipModalVideoId}`);
-    if (!videoResponse.ok) {
-      throw new Error('Failed to download video');
+
+    // Use correct API based on source
+    const apiBase = clipModalSource === 'metaads' ? '/api/metaads' : '/api/youtube';
+
+    // Start download job
+    const startResponse = await fetch(`${apiBase}/download-start/${clipModalVideoId}`, { method: 'POST' });
+    if (!startResponse.ok) {
+      throw new Error('Failed to start download');
     }
-    const videoBlob = await videoResponse.blob();
+    const { jobId } = await startResponse.json();
+    console.log('[Clips] Download job started:', jobId);
+
+    // Poll for completion
+    let videoBlob = null;
+    let elapsed = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      elapsed += 2;
+
+      const statusResponse = await fetch(`${apiBase}/download-status/${jobId}`);
+      const status = await statusResponse.json();
+
+      if (status.status === 'ready') {
+        const fileResponse = await fetch(`${apiBase}/download-file/${jobId}`);
+        if (!fileResponse.ok) throw new Error('Failed to download file');
+        videoBlob = await fileResponse.blob();
+        break;
+      } else if (status.status === 'failed') {
+        throw new Error(status.error || 'Download failed');
+      }
+
+      if (elapsed > 600) throw new Error('Download timed out');
+    }
+
     console.log('[Clips] Video downloaded:', formatSize(videoBlob.size));
 
     // Step 3: Load FFmpeg
