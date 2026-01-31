@@ -196,6 +196,35 @@ function clearHistory() {
   renderHistory();
 }
 
+function getSourceIcon(source) {
+  switch (source) {
+    case 'youtube':
+      return `<svg class="source-icon youtube" viewBox="0 0 24 24" fill="currentColor" title="YouTube">
+        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+      </svg>`;
+    case 'metaads':
+      return `<svg class="source-icon meta" viewBox="0 0 24 24" fill="currentColor" title="Meta Ads">
+        <path d="M12 2.04c-5.5 0-10 4.49-10 10.02 0 5 3.66 9.15 8.44 9.9v-7H7.9v-2.9h2.54V9.85c0-2.51 1.49-3.89 3.78-3.89 1.09 0 2.23.19 2.23.19v2.47h-1.26c-1.24 0-1.63.77-1.63 1.56v1.88h2.78l-.45 2.9h-2.33v7a10 10 0 0 0 8.44-9.9c0-5.53-4.5-10.02-10-10.02z"/>
+      </svg>`;
+    default:
+      return `<svg class="source-icon file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" title="Uploaded File">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>`;
+  }
+}
+
+function getSessionSources(session) {
+  // Get unique sources from session videos
+  const sources = new Set();
+  if (session.videos) {
+    session.videos.forEach(v => {
+      sources.add(v.source || 'file');
+    });
+  }
+  return Array.from(sources);
+}
+
 function renderHistory() {
   const history = getHistory();
   if (history.length === 0) {
@@ -209,11 +238,16 @@ function renderHistory() {
     });
     const displayName = session.name || session.videos.map(v => v.filename).join(', ');
     const truncated = displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName;
+    const sources = getSessionSources(session);
+    const sourceIcons = sources.map(s => getSourceIcon(s)).join('');
 
     return `
       <div class="history-item">
         <div class="history-item-header" onclick="loadHistorySession(${idx})">
-          <div class="history-item-date">${date}</div>
+          <div class="history-item-meta">
+            <div class="history-item-date">${date}</div>
+            <div class="history-source-icons">${sourceIcons}</div>
+          </div>
           <div class="history-item-videos">${truncated}</div>
         </div>
         <div class="history-item-actions">
@@ -514,7 +548,8 @@ async function fetchMetaAdsTranscripts() {
       videos: transcriptions.map(t => ({
         filename: t.filename,
         transcription: t.transcription,
-        videoId: t.videoId
+        videoId: t.videoId,
+        source: t.source || 'file'
       })),
       summaries: []
     });
@@ -604,7 +639,8 @@ async function fetchYoutubeTranscripts() {
       videos: transcriptions.map(t => ({
         filename: t.filename,
         transcription: t.transcription,
-        videoId: t.videoId
+        videoId: t.videoId,
+        source: t.source || 'file'
       })),
       summaries: []
     });
@@ -840,7 +876,7 @@ transcribeAllBtn.addEventListener('click', async () => {
     saveToHistory({
       id: Date.now(),
       date: new Date().toISOString(),
-      videos: transcriptions.map(t => ({ filename: t.filename, transcription: t.transcription, videoId: t.videoId })),
+      videos: transcriptions.map(t => ({ filename: t.filename, transcription: t.transcription, videoId: t.videoId, source: t.source || 'file' })),
       summaries: []
     });
   }

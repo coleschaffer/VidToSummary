@@ -1108,10 +1108,38 @@ h3 {
   background: var(--surface-2);
 }
 
+.history-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
 .history-item-date {
   font-size: 0.75rem;
   color: var(--text-muted);
-  margin-bottom: 4px;
+}
+
+.history-source-icons {
+  display: flex;
+  gap: 4px;
+}
+
+.source-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.source-icon.youtube {
+  color: #ff0000;
+}
+
+.source-icon.meta {
+  color: #0866FF;
+}
+
+.source-icon.file {
+  color: var(--text-muted);
 }
 
 .history-item-videos {
