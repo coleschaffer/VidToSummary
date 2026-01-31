@@ -701,7 +701,13 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     try {
       const titleCmd = `yt-dlp --proxy "${proxyUrl}" --get-title "https://www.youtube.com/watch?v=${videoId}"`;
       const { stdout } = await execAsync(titleCmd, { timeout: 30000 });
-      const title = stdout.trim().replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
+      // Sanitize title: remove control chars, special chars, and non-ASCII
+      const title = stdout.trim()
+        .replace(/[\x00-\x1f\x7f-\x9f]/g, '') // Remove control characters
+        .replace(/[<>:"/\\|?*#%&{}$!'`@=+]/g, '') // Remove special chars
+        .replace(/[^\x20-\x7E]/g, '') // Remove non-ASCII
+        .trim()
+        .substring(0, 100);
       if (title) filename = `${title}.mp4`;
     } catch (e) {
       console.log('[API] Could not get title:', e.message);
@@ -712,9 +718,9 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     const stats = await fsPromises.stat(tempFile);
     console.log(`[API] Video file size: ${(stats.size / 1024 / 1024).toFixed(1)}MB`);
 
-    // Set response headers
+    // Set response headers (use encodeURIComponent for filename* to handle any remaining special chars)
     res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Content-Length', stats.size);
 
     // Stream the file to client
