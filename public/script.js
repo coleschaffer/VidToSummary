@@ -165,7 +165,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Add listener for New Prompt button - creates a new saved prompt tag
   const newPromptBtn = document.getElementById('newPromptBtn');
   if (newPromptBtn) {
-    newPromptBtn.addEventListener('click', () => {
+    newPromptBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+
       // Remove focus from the New button immediately
       newPromptBtn.blur();
 
@@ -181,13 +183,17 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
+
+      // Re-render saved prompts
       renderSavedPrompts();
+
+      // Deselect all buttons first
+      document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
 
       // Select the newly created prompt (use setTimeout to ensure DOM is updated)
       setTimeout(() => {
         const newBtn = document.querySelector(`.saved-prompt-btn[data-id="${newId}"]`);
         if (newBtn) {
-          document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
           newBtn.classList.add('active');
           activePromptId = newId;
 
@@ -196,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
           promptInput.placeholder = 'Your prompt goes here...';
           promptInput.focus();
         }
-      }, 0);
+      }, 10);
     });
   }
 });
@@ -352,9 +358,46 @@ clearHistoryBtn.addEventListener('click', () => {
 renderHistory();
 
 // ==================== TAB SWITCHING ====================
+let currentTab = 'upload'; // Track current tab
+
 tabBtns.forEach(btn => {
   btn.addEventListener('click', () => {
     const tabName = btn.dataset.tab;
+
+    // If switching to a different tab and we have transcriptions, save to history and clear
+    if (tabName !== currentTab && transcriptions.length > 0) {
+      // Save current session to history
+      saveToHistory({
+        id: Date.now(),
+        date: new Date().toISOString(),
+        videos: transcriptions.map(t => ({
+          filename: t.filename,
+          transcription: t.transcription,
+          videoId: t.videoId,
+          source: t.source || 'file'
+        })),
+        summaries: summaries.map(s => ({
+          filename: s.filename,
+          prompt: s.prompt || '',
+          summary: s.summary
+        }))
+      });
+
+      // Clear current session
+      transcriptions = [];
+      summaries = [];
+      uploadQueue = [];
+
+      // Hide results and summary sections
+      resultsSection.classList.remove('visible');
+      summarySection.classList.remove('visible');
+      queueSection.classList.remove('visible');
+
+      // Clear the queue list
+      queueList.innerHTML = '';
+    }
+
+    currentTab = tabName;
     tabBtns.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
