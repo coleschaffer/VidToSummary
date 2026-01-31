@@ -51,6 +51,7 @@
         <div class="input-tabs">
           <button class="tab-btn active" data-tab="upload">Upload File</button>
           <button class="tab-btn" data-tab="youtube">YouTube URL</button>
+          <button class="tab-btn" data-tab="metaads">Meta Ads</button>
         </div>
 
         <div class="tab-content active" id="uploadTab">
@@ -90,6 +91,29 @@
             <p class="hint youtube-hint">Paste YouTube URLs to fetch transcripts. New fields appear automatically.</p>
           </div>
         </div>
+
+        <div class="tab-content" id="metaadsTab">
+          <div class="metaads-input-section">
+            <div class="metaads-urls-list" id="metaadsUrlsList">
+              <div class="metaads-input-row" data-index="0">
+                <div class="metaads-input-wrapper">
+                  <svg class="meta-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2.04c-5.5 0-10 4.49-10 10.02 0 5 3.66 9.15 8.44 9.9v-7H7.9v-2.9h2.54V9.85c0-2.51 1.49-3.89 3.78-3.89 1.09 0 2.23.19 2.23.19v2.47h-1.26c-1.24 0-1.63.77-1.63 1.56v1.88h2.78l-.45 2.9h-2.33v7a10 10 0 0 0 8.44-9.9c0-5.53-4.5-10.02-10-10.02z"/>
+                  </svg>
+                  <input type="text" class="metaads-url-input" placeholder="Paste Meta Ad Library URL here..." autocomplete="off">
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-primary" id="fetchMetaAdsBtn">
+              <span>Get Transcripts</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="13 17 18 12 13 7"/>
+                <polyline points="6 17 11 12 6 7"/>
+              </svg>
+            </button>
+            <p class="hint metaads-hint">Paste Meta Ad Library URLs to fetch transcripts. New fields appear automatically.</p>
+          </div>
+        </div>
       </section>
 
       <!-- Queue Section -->
@@ -127,6 +151,14 @@
             </button>
             <button class="preset-btn" data-prompt="custom">
               Custom
+            </button>
+            <!-- Saved prompts will be inserted here -->
+            <div class="saved-prompts-container" id="savedPromptsContainer"></div>
+            <button class="new-prompt-btn" id="newPromptBtn" title="Save current prompt">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              <span>New</span>
             </button>
           </div>
           <textarea id="promptInput" placeholder="Enter your prompt here...">Summarize this lesson for students. Include: key takeaways, main concepts covered, and action items. Format with headers and bullet points.</textarea>

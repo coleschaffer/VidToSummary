@@ -18,6 +18,8 @@ const historyList = document.getElementById('historyList');
 const clearHistoryBtn = document.getElementById('clearHistory');
 const youtubeUrlsList = document.getElementById('youtubeUrlsList');
 const fetchYoutubeBtn = document.getElementById('fetchYoutubeBtn');
+const metaadsUrlsList = document.getElementById('metaadsUrlsList');
+const fetchMetaAdsBtn = document.getElementById('fetchMetaAdsBtn');
 const tabBtns = document.querySelectorAll('.tab-btn');
 
 let uploadQueue = [];
@@ -27,6 +29,148 @@ let summaries = [];
 // ==================== HISTORY MANAGEMENT ====================
 const HISTORY_KEY = 'vt_history';
 const MAX_HISTORY_ITEMS = 20;
+
+// ==================== SAVED PROMPTS ====================
+const SAVED_PROMPTS_KEY = 'vt_saved_prompts';
+
+function getSavedPrompts() {
+  try {
+    return JSON.parse(localStorage.getItem(SAVED_PROMPTS_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function generatePromptName(promptText) {
+  // Extract key words from the prompt to generate a 1-3 word name
+  const stopWords = ['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought', 'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'and', 'but', 'if', 'or', 'because', 'until', 'while', 'this', 'that', 'these', 'those', 'what', 'which', 'who', 'whom', 'it', 'its', 'my', 'your', 'his', 'her', 'their', 'our', 'me', 'you', 'him', 'them', 'us', 'i'];
+
+  const words = promptText.toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter(word => word.length > 2 && !stopWords.includes(word));
+
+  // Get first 2-3 meaningful words
+  const nameWords = words.slice(0, 3);
+  if (nameWords.length === 0) return 'Custom Prompt';
+
+  return nameWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function savePrompt(promptText, customName = null) {
+  const prompts = getSavedPrompts();
+  const name = customName || generatePromptName(promptText);
+
+  prompts.push({
+    id: Date.now().toString(),
+    name: name,
+    prompt: promptText,
+    createdAt: new Date().toISOString()
+  });
+
+  localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
+  renderSavedPrompts();
+}
+
+function deletePrompt(id) {
+  const prompts = getSavedPrompts();
+  const index = prompts.findIndex(p => p.id === id);
+  if (index > -1) {
+    prompts.splice(index, 1);
+    localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
+    renderSavedPrompts();
+  }
+}
+
+function renamePrompt(id, newName) {
+  const prompts = getSavedPrompts();
+  const prompt = prompts.find(p => p.id === id);
+  if (prompt && newName && newName.trim()) {
+    prompt.name = newName.trim();
+    localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
+    renderSavedPrompts();
+  }
+}
+
+function renderSavedPrompts() {
+  const container = document.getElementById('savedPromptsContainer');
+  if (!container) return;
+
+  const prompts = getSavedPrompts();
+
+  container.innerHTML = prompts.map(p => `
+    <button class="saved-prompt-btn" data-id="${p.id}" data-prompt="${p.prompt.replace(/"/g, '&quot;')}" title="${p.prompt.substring(0, 100)}...">
+      ${p.name}
+      <div class="prompt-actions">
+        <button class="prompt-action-btn edit" onclick="editSavedPrompt('${p.id}'); event.stopPropagation();" title="Rename">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+          </svg>
+        </button>
+        <button class="prompt-action-btn delete" onclick="deleteSavedPrompt('${p.id}'); event.stopPropagation();" title="Delete">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+      </div>
+    </button>
+  `).join('');
+
+  // Add click listeners for saved prompts
+  container.querySelectorAll('.saved-prompt-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.prompt-actions')) return;
+
+      // Remove active from all preset and saved buttons
+      document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      promptInput.value = btn.dataset.prompt;
+    });
+  });
+}
+
+window.editSavedPrompt = function(id) {
+  const prompts = getSavedPrompts();
+  const prompt = prompts.find(p => p.id === id);
+  if (!prompt) return;
+
+  const newName = window.prompt('Rename prompt:', prompt.name);
+  if (newName && newName.trim()) {
+    renamePrompt(id, newName.trim());
+  }
+};
+
+window.deleteSavedPrompt = function(id) {
+  if (confirm('Delete this saved prompt?')) {
+    deletePrompt(id);
+  }
+};
+
+// Initialize saved prompts on load
+document.addEventListener('DOMContentLoaded', () => {
+  renderSavedPrompts();
+
+  // Add listener for New Prompt button
+  const newPromptBtn = document.getElementById('newPromptBtn');
+  if (newPromptBtn) {
+    newPromptBtn.addEventListener('click', () => {
+      const currentPrompt = promptInput.value.trim();
+      if (!currentPrompt) {
+        alert('Please enter a prompt first');
+        return;
+      }
+
+      // Check if this exact prompt already exists
+      const prompts = getSavedPrompts();
+      if (prompts.some(p => p.prompt === currentPrompt)) {
+        alert('This prompt is already saved');
+        return;
+      }
+
+      savePrompt(currentPrompt);
+    });
+  }
+});
 
 function getHistory() {
   try {
@@ -226,6 +370,163 @@ setupYoutubeInputListeners();
 updateRemoveButtons();
 
 fetchYoutubeBtn.addEventListener('click', fetchYoutubeTranscripts);
+
+// ==================== META ADS TRANSCRIPT ====================
+let metaadsUrlIndex = 0;
+
+function createMetaAdsInputRow(index) {
+  const row = document.createElement('div');
+  row.className = 'metaads-input-row';
+  row.dataset.index = index;
+  row.innerHTML = `
+    <div class="metaads-input-wrapper">
+      <svg class="meta-icon" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2.04c-5.5 0-10 4.49-10 10.02 0 5 3.66 9.15 8.44 9.9v-7H7.9v-2.9h2.54V9.85c0-2.51 1.49-3.89 3.78-3.89 1.09 0 2.23.19 2.23.19v2.47h-1.26c-1.24 0-1.63.77-1.63 1.56v1.88h2.78l-.45 2.9h-2.33v7a10 10 0 0 0 8.44-9.9c0-5.53-4.5-10.02-10-10.02z"/>
+      </svg>
+      <input type="text" class="metaads-url-input" placeholder="Paste Meta Ad Library URL here..." autocomplete="off">
+      <button class="remove-url-btn" onclick="removeMetaAdsUrl(${index})" title="Remove">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+  `;
+  return row;
+}
+
+function setupMetaAdsInputListeners() {
+  metaadsUrlsList.addEventListener('input', (e) => {
+    if (!e.target.classList.contains('metaads-url-input')) return;
+
+    const rows = metaadsUrlsList.querySelectorAll('.metaads-input-row');
+    const lastRow = rows[rows.length - 1];
+    const lastInput = lastRow.querySelector('.metaads-url-input');
+
+    // If the last input has a value, add a new row
+    if (lastInput.value.trim() && e.target === lastInput) {
+      metaadsUrlIndex++;
+      const newRow = createMetaAdsInputRow(metaadsUrlIndex);
+      metaadsUrlsList.appendChild(newRow);
+      updateMetaAdsRemoveButtons();
+    }
+  });
+
+  metaadsUrlsList.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && e.target.classList.contains('metaads-url-input')) {
+      e.preventDefault();
+      fetchMetaAdsTranscripts();
+    }
+  });
+}
+
+function updateMetaAdsRemoveButtons() {
+  const rows = metaadsUrlsList.querySelectorAll('.metaads-input-row');
+  rows.forEach((row) => {
+    const removeBtn = row.querySelector('.remove-url-btn');
+    if (removeBtn) {
+      removeBtn.style.display = rows.length <= 1 ? 'none' : 'flex';
+    }
+  });
+}
+
+window.removeMetaAdsUrl = function(index) {
+  const row = metaadsUrlsList.querySelector(`[data-index="${index}"]`);
+  if (row) {
+    row.remove();
+    updateMetaAdsRemoveButtons();
+  }
+};
+
+setupMetaAdsInputListeners();
+updateMetaAdsRemoveButtons();
+
+fetchMetaAdsBtn.addEventListener('click', fetchMetaAdsTranscripts);
+
+async function fetchMetaAdsTranscripts() {
+  const inputs = metaadsUrlsList.querySelectorAll('.metaads-url-input');
+  const urls = Array.from(inputs)
+    .map(input => input.value.trim())
+    .filter(url => url.length > 0);
+
+  if (urls.length === 0) return;
+
+  // Validate all URLs - Meta Ad Library format
+  const metaAdsRegex = /^(https?:\/\/)?(www\.)?facebook\.com\/ads\/library\/?\?.*id=\d+/;
+  const invalidUrls = urls.filter(url => !metaAdsRegex.test(url));
+  if (invalidUrls.length > 0) {
+    alert(`Invalid Meta Ad Library URL(s):\n${invalidUrls.join('\n')}\n\nExpected format: https://www.facebook.com/ads/library/?id=XXXXXXXXX`);
+    return;
+  }
+
+  fetchMetaAdsBtn.disabled = true;
+  fetchMetaAdsBtn.innerHTML = `<span class="spinner"></span> Fetching ${urls.length} ad${urls.length > 1 ? 's' : ''}...`;
+
+  let successCount = 0;
+  let errors = [];
+
+  for (const url of urls) {
+    try {
+      const response = await fetch('/api/metaads/transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        const errorMsg = error.suggestion ? `${error.error}\n\n${error.suggestion}` : error.error;
+        throw new Error(errorMsg || 'Failed to fetch transcript');
+      }
+
+      const data = await response.json();
+
+      // Use ad title, truncated if needed
+      const displayTitle = truncateTitle(data.title || data.adId);
+
+      // Add to transcriptions
+      transcriptions.push({
+        filename: displayTitle,
+        transcription: data.transcript,
+        videoId: data.adId,
+        source: 'metaads'
+      });
+
+      successCount++;
+      renderResults();
+
+    } catch (error) {
+      errors.push(`${url}: ${error.message}`);
+    }
+  }
+
+  // Clear inputs and reset to single input
+  metaadsUrlsList.innerHTML = '';
+  metaadsUrlIndex = 0;
+  metaadsUrlsList.appendChild(createMetaAdsInputRow(0));
+  updateMetaAdsRemoveButtons();
+
+  // Show results
+  if (successCount > 0) {
+    // Save to history
+    saveToHistory({
+      id: Date.now(),
+      date: new Date().toISOString(),
+      videos: transcriptions.map(t => ({
+        filename: t.filename,
+        transcription: t.transcription,
+        videoId: t.videoId
+      })),
+      summaries: []
+    });
+  }
+
+  if (errors.length > 0) {
+    alert(`Some ads failed:\n${errors.join('\n')}`);
+  }
+
+  fetchMetaAdsBtn.disabled = false;
+  fetchMetaAdsBtn.innerHTML = '<span>Get Transcripts</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>';
+}
 
 function truncateTitle(title, maxLength = 50) {
   if (title.length <= maxLength) return title;
@@ -820,7 +1121,9 @@ window.downloadAllVideos = async function(event) {
 // ==================== PROMPTS ====================
 presetBtns.forEach(btn => {
   btn.addEventListener('click', () => {
+    // Remove active from all preset and saved buttons
     presetBtns.forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.saved-prompt-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     if (btn.dataset.prompt === 'custom') { promptInput.value = ''; promptInput.focus(); }
     else promptInput.value = btn.dataset.prompt;

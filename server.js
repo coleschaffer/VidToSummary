@@ -651,6 +651,47 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
+// Meta Ads transcript endpoint
+app.post('/api/metaads/transcript', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'Meta Ad Library URL required' });
+  }
+
+  // Validate Meta Ad Library URL and extract ad ID
+  const metaAdsRegex = /facebook\.com\/ads\/library\/?\?.*id=(\d+)/;
+  const match = url.match(metaAdsRegex);
+
+  if (!match) {
+    return res.status(400).json({ error: 'Invalid Meta Ad Library URL. Expected format: https://www.facebook.com/ads/library/?id=XXXXXXXXX' });
+  }
+
+  const adId = match[1];
+  console.log(`[API] Fetching Meta Ad transcript for ad ID: ${adId}`);
+
+  try {
+    // Note: Meta Ad Library doesn't provide a public API for video transcripts.
+    // This would require either:
+    // 1. Using Facebook Graph API with proper authentication
+    // 2. Web scraping the video URL and then transcribing with AssemblyAI
+    // 3. Using a third-party service that provides Meta Ads data
+
+    // For now, return an informative error about the implementation status
+    // This endpoint structure is ready for when the proper API integration is added
+
+    return res.status(501).json({
+      error: 'Meta Ad transcript fetching is not yet implemented. This requires Facebook Graph API authentication or a specialized third-party service.',
+      adId: adId,
+      suggestion: 'Please download the video manually and use the "Upload File" option to transcribe it.'
+    });
+
+  } catch (error) {
+    console.error('[API] Meta Ads transcript error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Video download job queue (in-memory)
 const videoDownloadJobs = new Map();
 
