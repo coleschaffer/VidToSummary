@@ -770,7 +770,8 @@ h3 {
 }
 
 .saved-prompt-btn {
-  position: relative;
+  display: flex;
+  align-items: center;
   padding: 8px 12px;
   font-size: 0.75rem;
   font-weight: 500;
@@ -795,49 +796,40 @@ h3 {
 
 .saved-prompt-btn .prompt-actions {
   display: none;
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
 }
 
 .saved-prompt-btn:hover .prompt-actions {
   display: flex;
 }
 
-.saved-prompt-btn.active .prompt-actions {
-  display: flex;
-}
-
 .prompt-action-btn {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: inherit;
+  opacity: 0.6;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .prompt-action-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
+  opacity: 1;
 }
 
 .prompt-action-btn.delete:hover {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: var(--error);
   color: var(--error);
 }
 
 .prompt-action-btn.edit:hover {
-  background: rgba(99, 102, 241, 0.15);
-  border-color: var(--primary);
   color: var(--primary);
 }
 
