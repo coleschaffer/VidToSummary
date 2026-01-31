@@ -625,74 +625,80 @@ window.downloadVideo = async function(index, event) {
   const btn = event.currentTarget;
   const originalHTML = btn.innerHTML;
 
-  // Show loading state with message
   const showStatus = (msg) => {
     btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>${msg ? ` ${msg}` : ''}`;
   };
   showStatus('');
   btn.disabled = true;
 
-  // Update status periodically to show it's still working
-  let elapsed = 0;
-  const statusInterval = setInterval(() => {
-    elapsed += 10;
-    if (elapsed >= 30) {
-      showStatus(`${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, '0')}`);
-    }
-  }, 10000);
-
   try {
-    // Use AbortController with 10 minute timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes
-
-    // Fetch the video (waits for server to process with yt-dlp)
-    const response = await fetch(`/api/youtube/download/${item.videoId}`, {
-      signal: controller.signal
-    });
-
-    clearTimeout(timeoutId);
-    clearInterval(statusInterval);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Download failed' }));
-      throw new Error(error.error || 'Download failed');
+    // Start the download job
+    const startResponse = await fetch(`/api/youtube/download-start/${item.videoId}`, { method: 'POST' });
+    if (!startResponse.ok) {
+      const error = await startResponse.json().catch(() => ({ error: 'Failed to start download' }));
+      throw new Error(error.error);
     }
+    const { jobId } = await startResponse.json();
+    console.log('[Download] Job started:', jobId);
 
-    showStatus('Saving...');
+    // Poll for completion (works even when tab is in background)
+    let elapsed = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000)); // Poll every 2 seconds
+      elapsed += 2;
 
-    // Get filename from Content-Disposition header or use default
-    const contentDisposition = response.headers.get('Content-Disposition');
-    let filename = `${item.filename}.mp4`;
-    if (contentDisposition) {
-      const match = contentDisposition.match(/filename="(.+)"/);
-      if (match) filename = match[1];
+      // Update status display
+      if (elapsed >= 10) {
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        showStatus(mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `${secs}s`);
+      }
+
+      const statusResponse = await fetch(`/api/youtube/download-status/${jobId}`);
+      if (!statusResponse.ok) {
+        throw new Error('Failed to check download status');
+      }
+
+      const status = await statusResponse.json();
+
+      if (status.status === 'ready') {
+        console.log('[Download] Ready:', status.filename, `(${(status.fileSize / 1024 / 1024).toFixed(1)}MB)`);
+        showStatus('Saving...');
+
+        // Download the file
+        const fileResponse = await fetch(`/api/youtube/download-file/${jobId}`);
+        if (!fileResponse.ok) {
+          throw new Error('Failed to download file');
+        }
+
+        const blob = await fileResponse.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = status.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        break;
+      } else if (status.status === 'failed') {
+        throw new Error(status.error || 'Download failed');
+      }
+
+      // Timeout after 10 minutes
+      if (elapsed > 600) {
+        throw new Error('Download timed out');
+      }
     }
-
-    // Convert response to blob and trigger download
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
 
     btn.innerHTML = originalHTML;
     btn.disabled = false;
     showSuccess(btn);
   } catch (error) {
-    clearInterval(statusInterval);
     console.error('[Download] Error:', error.message);
     btn.innerHTML = originalHTML;
     btn.disabled = false;
-    if (error.name === 'AbortError') {
-      alert('Download timed out. Please try again and keep this tab active.');
-    } else {
-      alert('Download failed: ' + error.message);
-    }
+    alert('Download failed: ' + error.message);
   }
 };
 
@@ -756,46 +762,58 @@ window.downloadAllVideos = async function(event) {
   let completed = 0;
   let failed = 0;
 
-  const updateStatus = () => {
-    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${completed}/${youtubeVideos.length}`;
+  const updateStatus = (current, status) => {
+    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${current}/${youtubeVideos.length}${status ? ` ${status}` : ''}`;
   };
 
-  updateStatus();
+  updateStatus(0, '');
 
-  // Download videos sequentially (yt-dlp needs time to process each)
-  for (const video of youtubeVideos) {
+  // Download videos sequentially using job queue
+  for (let i = 0; i < youtubeVideos.length; i++) {
+    const video = youtubeVideos[i];
+    updateStatus(i + 1, 'processing...');
+
     try {
-      const response = await fetch(`/api/youtube/download/${video.videoId}`);
+      // Start download job
+      const startResponse = await fetch(`/api/youtube/download-start/${video.videoId}`, { method: 'POST' });
+      if (!startResponse.ok) throw new Error('Failed to start');
+      const { jobId } = await startResponse.json();
 
-      if (!response.ok) {
-        throw new Error('Download failed');
+      // Poll for completion
+      let elapsed = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        elapsed += 2;
+
+        const statusResponse = await fetch(`/api/youtube/download-status/${jobId}`);
+        const status = await statusResponse.json();
+
+        if (status.status === 'ready') {
+          // Download the file
+          const fileResponse = await fetch(`/api/youtube/download-file/${jobId}`);
+          if (!fileResponse.ok) throw new Error('Failed to download');
+
+          const blob = await fileResponse.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = status.filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          completed++;
+          break;
+        } else if (status.status === 'failed') {
+          throw new Error(status.error);
+        }
+
+        if (elapsed > 600) throw new Error('Timeout');
       }
-
-      // Get filename from header or use default
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `${video.filename}.mp4`;
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="(.+)"/);
-        if (match) filename = match[1];
-      }
-
-      // Create blob and download
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      completed++;
     } catch (e) {
       console.error(`[Download] Failed for ${video.videoId}:`, e.message);
       failed++;
     }
-    updateStatus();
   }
 
   btn.innerHTML = originalHTML;

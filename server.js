@@ -651,7 +651,159 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
-// YouTube video download endpoint - uses yt-dlp with Decodo residential proxy
+// Video download job queue (in-memory)
+const videoDownloadJobs = new Map();
+
+// Clean up old jobs every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of videoDownloadJobs) {
+    // Remove jobs older than 30 minutes
+    if (now - job.createdAt > 30 * 60 * 1000) {
+      if (job.filePath && existsSync(job.filePath)) {
+        try { unlinkSync(job.filePath); } catch (e) {}
+      }
+      videoDownloadJobs.delete(jobId);
+    }
+  }
+}, 10 * 60 * 1000);
+
+// Start video download job - returns immediately with job ID
+app.post('/api/youtube/download-start/:videoId', async (req, res) => {
+  const { videoId } = req.params;
+
+  if (!videoId || videoId.length !== 11) {
+    return res.status(400).json({ error: 'Invalid video ID' });
+  }
+
+  if (!DECODO_PROXY_USER || !DECODO_PROXY_PASS) {
+    return res.status(500).json({ error: 'Video download proxy not configured' });
+  }
+
+  const jobId = `dl_${videoId}_${Date.now()}`;
+  const tempFile = join(__dirname, 'temp', `${jobId}.mp4`);
+
+  // Create job entry
+  videoDownloadJobs.set(jobId, {
+    videoId,
+    status: 'processing',
+    filePath: tempFile,
+    filename: `${videoId}.mp4`,
+    createdAt: Date.now(),
+    error: null
+  });
+
+  // Return job ID immediately
+  res.json({ jobId });
+
+  // Process download in background
+  (async () => {
+    const job = videoDownloadJobs.get(jobId);
+    try {
+      console.log(`[API] [${jobId}] Starting download for: ${videoId}`);
+
+      const proxyUrl = getProxyUrl();
+      console.log(`[API] [${jobId}] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
+
+      const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist "https://www.youtube.com/watch?v=${videoId}"`;
+
+      const startTime = Date.now();
+      await execAsync(ytdlpCmd, { timeout: 300000 });
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[API] [${jobId}] yt-dlp completed in ${elapsed}s`);
+
+      if (!existsSync(tempFile)) {
+        throw new Error('Download completed but file not found');
+      }
+
+      // Get video title for filename
+      try {
+        const titleCmd = `yt-dlp --proxy "${proxyUrl}" --get-title "https://www.youtube.com/watch?v=${videoId}"`;
+        const { stdout } = await execAsync(titleCmd, { timeout: 30000 });
+        const title = stdout.trim()
+          .replace(/[\x00-\x1f\x7f-\x9f]/g, '')
+          .replace(/[<>:"/\\|?*#%&{}$!'`@=+]/g, '')
+          .replace(/[^\x20-\x7E]/g, '')
+          .trim()
+          .substring(0, 100);
+        if (title) job.filename = `${title}.mp4`;
+      } catch (e) {
+        console.log(`[API] [${jobId}] Could not get title:`, e.message);
+      }
+
+      const fsPromises = await import('fs/promises');
+      const stats = await fsPromises.stat(tempFile);
+      job.fileSize = stats.size;
+      job.status = 'ready';
+      console.log(`[API] [${jobId}] Ready: ${job.filename} (${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
+
+    } catch (error) {
+      console.error(`[API] [${jobId}] Failed:`, error.message);
+      job.status = 'failed';
+      job.error = error.message;
+      if (existsSync(tempFile)) {
+        try { unlinkSync(tempFile); } catch (e) {}
+      }
+    }
+  })();
+});
+
+// Check download job status
+app.get('/api/youtube/download-status/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const job = videoDownloadJobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  res.json({
+    status: job.status,
+    filename: job.filename,
+    fileSize: job.fileSize,
+    error: job.error
+  });
+});
+
+// Download ready file
+app.get('/api/youtube/download-file/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const job = videoDownloadJobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  if (job.status !== 'ready') {
+    return res.status(400).json({ error: 'File not ready yet' });
+  }
+
+  if (!existsSync(job.filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Disposition', `attachment; filename="${job.filename}"; filename*=UTF-8''${encodeURIComponent(job.filename)}`);
+  res.setHeader('Content-Length', job.fileSize);
+
+  const fileStream = createReadStream(job.filePath);
+
+  fileStream.on('end', () => {
+    console.log(`[API] [${jobId}] File sent successfully`);
+    // Clean up
+    try { unlinkSync(job.filePath); } catch (e) {}
+    videoDownloadJobs.delete(jobId);
+  });
+
+  fileStream.on('error', (err) => {
+    console.error(`[API] [${jobId}] Stream error:`, err.message);
+  });
+
+  fileStream.pipe(res);
+});
+
+// Legacy download endpoint (kept for backwards compatibility with clips)
 app.get('/api/youtube/download/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
@@ -671,41 +823,27 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     const proxyUrl = getProxyUrl();
     console.log(`[API] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
 
-    // yt-dlp command with proxy and format selection (video+audio merged)
-    const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --verbose "https://www.youtube.com/watch?v=${videoId}"`;
+    const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist "https://www.youtube.com/watch?v=${videoId}"`;
 
     console.log('[API] Running yt-dlp...');
     const startTime = Date.now();
-
-    try {
-      const { stdout, stderr } = await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 minute timeout
-      if (stdout) console.log('[yt-dlp stdout]', stdout.substring(0, 500));
-      if (stderr) console.log('[yt-dlp stderr]', stderr.substring(0, 500));
-    } catch (cmdError) {
-      console.error('[API] yt-dlp command failed:', cmdError.message);
-      if (cmdError.stdout) console.log('[yt-dlp stdout]', cmdError.stdout.substring(0, 1000));
-      if (cmdError.stderr) console.log('[yt-dlp stderr]', cmdError.stderr.substring(0, 1000));
-      throw cmdError;
-    }
+    await execAsync(ytdlpCmd, { timeout: 300000 });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[API] yt-dlp completed in ${elapsed}s`);
 
-    // Check if file exists
     if (!existsSync(tempFile)) {
       throw new Error('Download completed but file not found');
     }
 
-    // Get video title for filename
     let filename = `${videoId}.mp4`;
     try {
       const titleCmd = `yt-dlp --proxy "${proxyUrl}" --get-title "https://www.youtube.com/watch?v=${videoId}"`;
       const { stdout } = await execAsync(titleCmd, { timeout: 30000 });
-      // Sanitize title: remove control chars, special chars, and non-ASCII
       const title = stdout.trim()
-        .replace(/[\x00-\x1f\x7f-\x9f]/g, '') // Remove control characters
-        .replace(/[<>:"/\\|?*#%&{}$!'`@=+]/g, '') // Remove special chars
-        .replace(/[^\x20-\x7E]/g, '') // Remove non-ASCII
+        .replace(/[\x00-\x1f\x7f-\x9f]/g, '')
+        .replace(/[<>:"/\\|?*#%&{}$!'`@=+]/g, '')
+        .replace(/[^\x20-\x7E]/g, '')
         .trim()
         .substring(0, 100);
       if (title) filename = `${title}.mp4`;
@@ -713,38 +851,24 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
       console.log('[API] Could not get title:', e.message);
     }
 
-    // Get file size
     const fsPromises = await import('fs/promises');
     const stats = await fsPromises.stat(tempFile);
     console.log(`[API] Video file size: ${(stats.size / 1024 / 1024).toFixed(1)}MB`);
 
-    // Set response headers (use encodeURIComponent for filename* to handle any remaining special chars)
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Content-Length', stats.size);
 
-    // Stream the file to client
     const fileStream = createReadStream(tempFile);
-    const streamStart = Date.now();
 
     fileStream.on('end', () => {
-      const elapsed = ((Date.now() - streamStart) / 1000).toFixed(1);
-      console.log(`[API] Stream complete: ${filename} sent in ${elapsed}s`);
-      // Clean up temp file after streaming
+      console.log(`[API] Stream complete: ${filename}`);
       try { unlinkSync(tempFile); } catch (e) {}
     });
 
     fileStream.on('error', (err) => {
       console.error('[API] Stream error:', err.message);
       try { unlinkSync(tempFile); } catch (e) {}
-    });
-
-    // Handle client disconnect
-    res.on('close', () => {
-      if (!res.writableFinished) {
-        console.log('[API] Client disconnected before download completed');
-        try { unlinkSync(tempFile); } catch (e) {}
-      }
     });
 
     fileStream.pipe(res);
