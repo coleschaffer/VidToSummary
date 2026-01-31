@@ -124,7 +124,16 @@ function renderSavedPrompts() {
       // Remove active from all preset and saved buttons
       document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      promptInput.value = btn.dataset.prompt;
+      activePromptId = btn.dataset.id;
+
+      // Load prompt content (might be empty for new prompts)
+      const promptContent = btn.dataset.prompt;
+      if (promptContent) {
+        promptInput.value = promptContent;
+      } else {
+        promptInput.value = '';
+        promptInput.placeholder = 'Your prompt goes here...';
+      }
     });
   });
 }
@@ -146,58 +155,43 @@ window.deleteSavedPrompt = function(id) {
   }
 };
 
+// Track currently active saved prompt ID (for updating on run)
+let activePromptId = null;
+
 // Initialize saved prompts on load
 document.addEventListener('DOMContentLoaded', () => {
   renderSavedPrompts();
 
-  // Add listener for New Prompt button
+  // Add listener for New Prompt button - creates a new saved prompt tag
   const newPromptBtn = document.getElementById('newPromptBtn');
   if (newPromptBtn) {
-    newPromptBtn.addEventListener('click', (e) => {
-      // Ignore clicks on action buttons
-      if (e.target.closest('.new-prompt-actions')) return;
-
-      // Clear prompt and show placeholder
-      promptInput.value = '';
-      promptInput.placeholder = 'Your prompt goes here...';
-      promptInput.focus();
-
-      // Deselect all preset and saved buttons, activate New
-      document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
-      newPromptBtn.classList.add('active');
-    });
-  }
-
-  // Edit (save) button inside New - saves the current prompt
-  const editNewPromptBtn = document.getElementById('editNewPromptBtn');
-  if (editNewPromptBtn) {
-    editNewPromptBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const currentPrompt = promptInput.value.trim();
-      if (!currentPrompt) {
-        alert('Please enter a prompt first');
-        return;
-      }
-
-      // Check if this exact prompt already exists
+    newPromptBtn.addEventListener('click', () => {
+      // Create a new saved prompt with placeholder name
+      const newId = Date.now().toString();
       const prompts = getSavedPrompts();
-      if (prompts.some(p => p.prompt === currentPrompt)) {
-        alert('This prompt is already saved');
-        return;
+
+      prompts.push({
+        id: newId,
+        name: 'New Prompt',
+        prompt: '',
+        createdAt: new Date().toISOString()
+      });
+
+      localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
+      renderSavedPrompts();
+
+      // Select the newly created prompt
+      const newBtn = document.querySelector(`.saved-prompt-btn[data-id="${newId}"]`);
+      if (newBtn) {
+        document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
+        newBtn.classList.add('active');
+        activePromptId = newId;
+
+        // Clear the textarea and focus
+        promptInput.value = '';
+        promptInput.placeholder = 'Your prompt goes here...';
+        promptInput.focus();
       }
-
-      savePrompt(currentPrompt);
-      newPromptBtn.classList.remove('active');
-    });
-  }
-
-  // Delete (clear) button inside New - clears the prompt
-  const deleteNewPromptBtn = document.getElementById('deleteNewPromptBtn');
-  if (deleteNewPromptBtn) {
-    deleteNewPromptBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      promptInput.value = '';
-      promptInput.placeholder = 'Your prompt goes here...';
     });
   }
 });
@@ -1270,6 +1264,7 @@ presetBtns.forEach(btn => {
     presetBtns.forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.saved-prompt-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+    activePromptId = null; // Clear active saved prompt when selecting a preset
     if (btn.dataset.prompt === 'custom') { promptInput.value = ''; promptInput.focus(); }
     else promptInput.value = btn.dataset.prompt;
   });
@@ -1279,6 +1274,33 @@ runPromptBtn.addEventListener('click', async () => {
   if (!transcriptions.length) return;
   const prompt = promptInput.value.trim();
   if (!prompt) return;
+
+  // Update saved prompt if one is active and needs updating
+  if (activePromptId) {
+    const prompts = getSavedPrompts();
+    const savedPrompt = prompts.find(p => p.id === activePromptId);
+    if (savedPrompt) {
+      // Update prompt content
+      savedPrompt.prompt = prompt;
+
+      // Auto-rename if still called "New Prompt"
+      if (savedPrompt.name === 'New Prompt') {
+        savedPrompt.name = generatePromptName(prompt);
+      }
+
+      localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
+      renderSavedPrompts();
+
+      // Re-select the updated prompt
+      setTimeout(() => {
+        const updatedBtn = document.querySelector(`.saved-prompt-btn[data-id="${activePromptId}"]`);
+        if (updatedBtn) {
+          document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
+          updatedBtn.classList.add('active');
+        }
+      }, 0);
+    }
+  }
 
   runPromptBtn.disabled = true;
   runPromptBtn.innerHTML = '<span class="spinner"></span> Processing...';

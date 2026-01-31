@@ -555,6 +555,10 @@ h3 {
   flex-direction: column;
   gap: 12px;
   margin-bottom: 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
 }
 
 .result-item {
@@ -805,7 +809,6 @@ h3 {
 
 /* New Prompt Button */
 .new-prompt-btn {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -826,28 +829,8 @@ h3 {
   background: rgba(99, 102, 241, 0.05);
 }
 
-.new-prompt-btn.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  border-style: solid;
-  color: white;
-}
-
-.new-prompt-btn svg.new-icon {
+.new-prompt-btn svg {
   flex-shrink: 0;
-}
-
-.new-prompt-actions {
-  display: none;
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  gap: 2px;
-}
-
-.new-prompt-btn:hover .new-prompt-actions,
-.new-prompt-btn.active .new-prompt-actions {
-  display: flex;
 }
 
 #promptInput {
