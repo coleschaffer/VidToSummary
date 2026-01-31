@@ -617,7 +617,7 @@ window.downloadText = function(index, type, event) {
   showSuccess(event.currentTarget);
 };
 
-window.downloadVideo = function(index, event) {
+window.downloadVideo = async function(index, event) {
   event.stopPropagation();
   const item = transcriptions[index];
   if (!item || !item.videoId || item.source !== 'youtube') return;
@@ -629,20 +629,43 @@ window.downloadVideo = function(index, event) {
   btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>';
   btn.disabled = true;
 
-  // Create a hidden link to trigger the download
-  const a = document.createElement('a');
-  a.href = `/api/youtube/download/${item.videoId}`;
-  a.download = `${item.filename}.mp4`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  try {
+    // Fetch the video (waits for server to process with yt-dlp)
+    const response = await fetch(`/api/youtube/download/${item.videoId}`);
 
-  // Show success after a short delay (since we can't track actual download completion)
-  setTimeout(() => {
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Download failed' }));
+      throw new Error(error.error || 'Download failed');
+    }
+
+    // Get filename from Content-Disposition header or use default
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = `${item.filename}.mp4`;
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/);
+      if (match) filename = match[1];
+    }
+
+    // Convert response to blob and trigger download
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
     btn.innerHTML = originalHTML;
     btn.disabled = false;
     showSuccess(btn);
-  }, 1500);
+  } catch (error) {
+    console.error('[Download] Error:', error.message);
+    btn.innerHTML = originalHTML;
+    btn.disabled = false;
+    alert('Download failed: ' + error.message);
+  }
 };
 
 function downloadFile(content, filename) {
@@ -700,32 +723,61 @@ window.downloadAllVideos = async function(event) {
   const btn = event.currentTarget;
   const originalHTML = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>Downloading...';
 
   const youtubeVideos = transcriptions.filter(t => t.source === 'youtube' && t.videoId);
+  let completed = 0;
+  let failed = 0;
 
-  // Download videos sequentially with a small delay to avoid overwhelming the browser
-  for (let i = 0; i < youtubeVideos.length; i++) {
-    const video = youtubeVideos[i];
-    const a = document.createElement('a');
-    a.href = `/api/youtube/download/${video.videoId}`;
-    a.download = `${video.filename}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const updateStatus = () => {
+    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${completed}/${youtubeVideos.length}`;
+  };
 
-    // Wait a bit between downloads to let browser handle them
-    if (i < youtubeVideos.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+  updateStatus();
+
+  // Download videos sequentially (yt-dlp needs time to process each)
+  for (const video of youtubeVideos) {
+    try {
+      const response = await fetch(`/api/youtube/download/${video.videoId}`);
+
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+
+      // Get filename from header or use default
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = `${video.filename}.mp4`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) filename = match[1];
+      }
+
+      // Create blob and download
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      completed++;
+    } catch (e) {
+      console.error(`[Download] Failed for ${video.videoId}:`, e.message);
+      failed++;
     }
+    updateStatus();
   }
 
-  // Restore button after all downloads started
-  setTimeout(() => {
-    btn.innerHTML = originalHTML;
-    btn.disabled = false;
+  btn.innerHTML = originalHTML;
+  btn.disabled = false;
+
+  if (failed > 0) {
+    alert(`Downloaded ${completed} videos. ${failed} failed.`);
+  } else {
     showSuccess(btn);
-  }, 1500);
+  }
 };
 
 // ==================== PROMPTS ====================
