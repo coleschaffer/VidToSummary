@@ -166,6 +166,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const newPromptBtn = document.getElementById('newPromptBtn');
   if (newPromptBtn) {
     newPromptBtn.addEventListener('click', () => {
+      // Remove focus from the New button immediately
+      newPromptBtn.blur();
+
       // Create a new saved prompt with placeholder name
       const newId = Date.now().toString();
       const prompts = getSavedPrompts();
@@ -180,18 +183,20 @@ document.addEventListener('DOMContentLoaded', () => {
       localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(prompts));
       renderSavedPrompts();
 
-      // Select the newly created prompt
-      const newBtn = document.querySelector(`.saved-prompt-btn[data-id="${newId}"]`);
-      if (newBtn) {
-        document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
-        newBtn.classList.add('active');
-        activePromptId = newId;
+      // Select the newly created prompt (use setTimeout to ensure DOM is updated)
+      setTimeout(() => {
+        const newBtn = document.querySelector(`.saved-prompt-btn[data-id="${newId}"]`);
+        if (newBtn) {
+          document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
+          newBtn.classList.add('active');
+          activePromptId = newId;
 
-        // Clear the textarea and focus
-        promptInput.value = '';
-        promptInput.placeholder = 'Your prompt goes here...';
-        promptInput.focus();
-      }
+          // Clear the textarea and focus
+          promptInput.value = '';
+          promptInput.placeholder = 'Your prompt goes here...';
+          promptInput.focus();
+        }
+      }, 0);
     });
   }
 });

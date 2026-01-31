@@ -829,6 +829,10 @@ h3 {
   background: rgba(99, 102, 241, 0.05);
 }
 
+.new-prompt-btn:focus {
+  outline: none;
+}
+
 .new-prompt-btn svg {
   flex-shrink: 0;
 }
