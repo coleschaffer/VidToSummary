@@ -705,7 +705,8 @@ app.post('/api/youtube/download-start/:videoId', async (req, res) => {
       const proxyUrl = getProxyUrl();
       console.log(`[API] [${jobId}] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
 
-      const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist "https://www.youtube.com/watch?v=${videoId}"`;
+      // Use Android client to bypass restrictions, add user agent
+      const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.youtube.com/watch?v=${videoId}"`;
 
       const startTime = Date.now();
       await execAsync(ytdlpCmd, { timeout: 300000 });
@@ -719,7 +720,7 @@ app.post('/api/youtube/download-start/:videoId', async (req, res) => {
 
       // Get video title for filename
       try {
-        const titleCmd = `yt-dlp --proxy "${proxyUrl}" --get-title "https://www.youtube.com/watch?v=${videoId}"`;
+        const titleCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" --no-check-certificates --get-title "https://www.youtube.com/watch?v=${videoId}"`;
         const { stdout } = await execAsync(titleCmd, { timeout: 30000 });
         const title = stdout.trim()
           .replace(/[\x00-\x1f\x7f-\x9f]/g, '')
@@ -823,7 +824,7 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     const proxyUrl = getProxyUrl();
     console.log(`[API] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
 
-    const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist "https://www.youtube.com/watch?v=${videoId}"`;
+    const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.youtube.com/watch?v=${videoId}"`;
 
     console.log('[API] Running yt-dlp...');
     const startTime = Date.now();
