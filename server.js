@@ -725,8 +725,11 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
 
     // Stream the file to client
     const fileStream = createReadStream(tempFile);
+    const streamStart = Date.now();
 
     fileStream.on('end', () => {
+      const elapsed = ((Date.now() - streamStart) / 1000).toFixed(1);
+      console.log(`[API] Stream complete: ${filename} sent in ${elapsed}s`);
       // Clean up temp file after streaming
       try { unlinkSync(tempFile); } catch (e) {}
     });
@@ -734,6 +737,14 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     fileStream.on('error', (err) => {
       console.error('[API] Stream error:', err.message);
       try { unlinkSync(tempFile); } catch (e) {}
+    });
+
+    // Handle client disconnect
+    res.on('close', () => {
+      if (!res.writableFinished) {
+        console.log('[API] Client disconnected before download completed');
+        try { unlinkSync(tempFile); } catch (e) {}
+      }
     });
 
     fileStream.pipe(res);

@@ -625,18 +625,41 @@ window.downloadVideo = async function(index, event) {
   const btn = event.currentTarget;
   const originalHTML = btn.innerHTML;
 
-  // Show loading state
-  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>';
+  // Show loading state with message
+  const showStatus = (msg) => {
+    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>${msg ? ` ${msg}` : ''}`;
+  };
+  showStatus('');
   btn.disabled = true;
 
+  // Update status periodically to show it's still working
+  let elapsed = 0;
+  const statusInterval = setInterval(() => {
+    elapsed += 10;
+    if (elapsed >= 30) {
+      showStatus(`${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, '0')}`);
+    }
+  }, 10000);
+
   try {
+    // Use AbortController with 10 minute timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes
+
     // Fetch the video (waits for server to process with yt-dlp)
-    const response = await fetch(`/api/youtube/download/${item.videoId}`);
+    const response = await fetch(`/api/youtube/download/${item.videoId}`, {
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+    clearInterval(statusInterval);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Download failed' }));
       throw new Error(error.error || 'Download failed');
     }
+
+    showStatus('Saving...');
 
     // Get filename from Content-Disposition header or use default
     const contentDisposition = response.headers.get('Content-Disposition');
@@ -661,10 +684,15 @@ window.downloadVideo = async function(index, event) {
     btn.disabled = false;
     showSuccess(btn);
   } catch (error) {
+    clearInterval(statusInterval);
     console.error('[Download] Error:', error.message);
     btn.innerHTML = originalHTML;
     btn.disabled = false;
-    alert('Download failed: ' + error.message);
+    if (error.name === 'AbortError') {
+      alert('Download timed out. Please try again and keep this tab active.');
+    } else {
+      alert('Download failed: ' + error.message);
+    }
   }
 };
 
