@@ -669,24 +669,24 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     console.log(`[API] Downloading video via yt-dlp: ${videoId}`);
 
     const proxyUrl = getProxyUrl();
-    console.log(`[API] Using proxy port: ${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
+    console.log(`[API] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
 
     // yt-dlp command with proxy and format selection (video+audio merged)
-    const ytdlpArgs = [
-      'yt-dlp',
-      '--proxy', `"${proxyUrl}"`,
-      '-f', '"bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
-      '--merge-output-format', 'mp4',
-      '-o', `"${tempFile}"`,
-      '--no-playlist',
-      '--no-warnings',
-      `"https://www.youtube.com/watch?v=${videoId}"`
-    ];
+    const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --verbose "https://www.youtube.com/watch?v=${videoId}"`;
 
     console.log('[API] Running yt-dlp...');
     const startTime = Date.now();
 
-    await execAsync(ytdlpArgs.join(' '), { timeout: 300000 }); // 5 minute timeout
+    try {
+      const { stdout, stderr } = await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 minute timeout
+      if (stdout) console.log('[yt-dlp stdout]', stdout.substring(0, 500));
+      if (stderr) console.log('[yt-dlp stderr]', stderr.substring(0, 500));
+    } catch (cmdError) {
+      console.error('[API] yt-dlp command failed:', cmdError.message);
+      if (cmdError.stdout) console.log('[yt-dlp stdout]', cmdError.stdout.substring(0, 1000));
+      if (cmdError.stderr) console.log('[yt-dlp stderr]', cmdError.stderr.substring(0, 1000));
+      throw cmdError;
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`[API] yt-dlp completed in ${elapsed}s`);
