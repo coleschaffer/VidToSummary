@@ -80,8 +80,18 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Supadata API for YouTube transcripts
 const SUPADATA_API_KEY = process.env.SUPADATA_API_KEY;
 
-// RapidAPI for YouTube video downloads
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+// Decodo proxy for YouTube video downloads (via yt-dlp)
+const DECODO_PROXY_USER = process.env.DECODO_PROXY_USER;
+const DECODO_PROXY_PASS = process.env.DECODO_PROXY_PASS;
+const DECODO_PROXY_HOST = 'gate.decodo.com';
+// Use ports 10001-10010 randomly for load distribution
+const getProxyUrl = () => {
+  const port = 10001 + Math.floor(Math.random() * 10);
+  return `http://${DECODO_PROXY_USER}:${DECODO_PROXY_PASS}@${DECODO_PROXY_HOST}:${port}`;
+};
+
+// Promisify exec for async/await usage
+const execAsync = promisify(exec);
 
 // Translate transcript to English using Claude (with chunking for large texts)
 async function translateToEnglish(text, sourceLang) {
@@ -641,7 +651,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
-// YouTube video download endpoint - uses RapidAPI YouTube Media Downloader
+// YouTube video download endpoint - uses yt-dlp with Decodo residential proxy
 app.get('/api/youtube/download/:videoId', async (req, res) => {
   const { videoId } = req.params;
 
@@ -649,323 +659,85 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     return res.status(400).json({ error: 'Invalid video ID' });
   }
 
-  if (!RAPIDAPI_KEY) {
-    return res.status(500).json({ error: 'Video download service not configured' });
+  if (!DECODO_PROXY_USER || !DECODO_PROXY_PASS) {
+    return res.status(500).json({ error: 'Video download proxy not configured' });
   }
 
+  const tempFile = join(__dirname, 'temp', `${videoId}_${Date.now()}.mp4`);
+
   try {
-    console.log(`[API] Requesting video download for: ${videoId}`);
+    console.log(`[API] Downloading video via yt-dlp: ${videoId}`);
 
-    // Get video details from RapidAPI
-    const apiUrl = `https://youtube-media-downloader.p.rapidapi.com/v2/video/details?videoId=${videoId}`;
-    const apiResponse = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
-        'x-rapidapi-key': RAPIDAPI_KEY
-      }
-    });
+    const proxyUrl = getProxyUrl();
+    console.log(`[API] Using proxy port: ${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
 
-    if (!apiResponse.ok) {
-      const errorText = await apiResponse.text().catch(() => 'No response body');
-      console.error(`[API] RapidAPI error ${apiResponse.status}:`, errorText);
-      throw new Error(`RapidAPI error: ${apiResponse.status}`);
+    // yt-dlp command with proxy and format selection (video+audio merged)
+    const ytdlpArgs = [
+      'yt-dlp',
+      '--proxy', `"${proxyUrl}"`,
+      '-f', '"bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best"',
+      '--merge-output-format', 'mp4',
+      '-o', `"${tempFile}"`,
+      '--no-playlist',
+      '--no-warnings',
+      `"https://www.youtube.com/watch?v=${videoId}"`
+    ];
+
+    console.log('[API] Running yt-dlp...');
+    const startTime = Date.now();
+
+    await execAsync(ytdlpArgs.join(' '), { timeout: 300000 }); // 5 minute timeout
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[API] yt-dlp completed in ${elapsed}s`);
+
+    // Check if file exists
+    if (!existsSync(tempFile)) {
+      throw new Error('Download completed but file not found');
     }
 
-    const data = await apiResponse.json();
-    console.log('[API] RapidAPI response received for:', videoId, '- videos:', data.videos?.items?.length || 0);
-
-    // Find a suitable video format (prefer 720p mp4)
-    let downloadUrl;
+    // Get video title for filename
     let filename = `${videoId}.mp4`;
-
-    // Log available formats for debugging
-    console.log('[API] Available video formats:', JSON.stringify(data.videos?.items?.map(v => ({
-      quality: v.quality,
-      extension: v.extension,
-      hasAudio: v.hasAudio,
-      audioChannels: v.audioChannels
-    })) || []).substring(0, 500));
-
-    if (data.videos?.items && data.videos.items.length > 0) {
-      // Prefer formats with audio (hasAudio or audioChannels property)
-      const withAudio = data.videos.items.filter(v => v.hasAudio || v.audioChannels);
-      const candidates = withAudio.length > 0 ? withAudio : data.videos.items;
-
-      // Look for 720p mp4 first, then any mp4, then fallback
-      const video = candidates.find(v => v.quality === '720p' && v.extension === 'mp4')
-        || candidates.find(v => v.extension === 'mp4')
-        || candidates[0];
-
-      downloadUrl = video.url;
-      console.log('[API] Selected:', video.quality, video.extension, 'hasAudio:', video.hasAudio, 'audioChannels:', video.audioChannels);
-      if (data.title) {
-        const safeTitle = data.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
-        filename = `${safeTitle}.${video.extension || 'mp4'}`;
-      }
+    try {
+      const titleCmd = `yt-dlp --proxy "${proxyUrl}" --get-title "https://www.youtube.com/watch?v=${videoId}"`;
+      const { stdout } = await execAsync(titleCmd, { timeout: 30000 });
+      const title = stdout.trim().replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
+      if (title) filename = `${title}.mp4`;
+    } catch (e) {
+      console.log('[API] Could not get title:', e.message);
     }
 
-    if (!downloadUrl) {
-      console.error('[API] No download URL found. Response:', JSON.stringify(data).substring(0, 500));
-      return res.status(404).json({ error: 'No download URL available for this video' });
-    }
-
-    console.log('[API] Proxying video download for:', videoId, '- URL:', downloadUrl.substring(0, 80) + '...');
-
-    // Fetch the video and proxy it through our server
-    const videoResponse = await fetch(downloadUrl);
-
-    if (!videoResponse.ok) {
-      console.error(`[API] Video fetch failed: ${videoResponse.status} ${videoResponse.statusText}`);
-      throw new Error(`Failed to fetch video: ${videoResponse.status}`);
-    }
-
-    const contentLength = videoResponse.headers.get('content-length');
-    console.log('[API] Video response OK, size:', contentLength ? `${(parseInt(contentLength) / 1024 / 1024).toFixed(1)}MB` : 'unknown');
+    // Get file size
+    const fsPromises = await import('fs/promises');
+    const stats = await fsPromises.stat(tempFile);
+    console.log(`[API] Video file size: ${(stats.size / 1024 / 1024).toFixed(1)}MB`);
 
     // Set response headers
-    res.setHeader('Content-Type', videoResponse.headers.get('content-type') || 'video/mp4');
+    res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    if (contentLength) {
-      res.setHeader('Content-Length', contentLength);
-    }
+    res.setHeader('Content-Length', stats.size);
 
-    // Stream the video to the client
-    const nodeStream = await import('stream');
-    const readable = nodeStream.Readable.fromWeb(videoResponse.body);
+    // Stream the file to client
+    const fileStream = createReadStream(tempFile);
 
-    readable.on('error', (err) => {
+    fileStream.on('end', () => {
+      // Clean up temp file after streaming
+      try { unlinkSync(tempFile); } catch (e) {}
+    });
+
+    fileStream.on('error', (err) => {
       console.error('[API] Stream error:', err.message);
+      try { unlinkSync(tempFile); } catch (e) {}
     });
 
-    readable.pipe(res);
+    fileStream.pipe(res);
 
   } catch (error) {
-    console.error('[API] YouTube download error:', error.message);
+    console.error('[API] yt-dlp download error:', error.message);
+    // Clean up temp file on error
+    try { unlinkSync(tempFile); } catch (e) {}
     if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to download video. Please try again.' });
-    }
-  }
-});
-
-// Get YouTube video URL (for client-side processing)
-app.get('/api/youtube/video-url/:videoId', async (req, res) => {
-  const { videoId } = req.params;
-
-  if (!videoId || videoId.length !== 11) {
-    return res.status(400).json({ error: 'Invalid video ID' });
-  }
-
-  if (!RAPIDAPI_KEY) {
-    return res.status(500).json({ error: 'Video download service not configured' });
-  }
-
-  try {
-    console.log(`[API] Getting video URL for: ${videoId}`);
-
-    const apiUrl = `https://youtube-media-downloader.p.rapidapi.com/v2/video/details?videoId=${videoId}`;
-    const apiResponse = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
-        'x-rapidapi-key': RAPIDAPI_KEY
-      }
-    });
-
-    if (!apiResponse.ok) {
-      throw new Error(`RapidAPI error: ${apiResponse.status}`);
-    }
-
-    const data = await apiResponse.json();
-
-    if (!data.videos?.items || data.videos.items.length === 0) {
-      return res.status(404).json({ error: 'No video formats available' });
-    }
-
-    // Find suitable format (prefer 720p mp4)
-    const video = data.videos.items.find(v => v.quality === '720p' && v.extension === 'mp4')
-      || data.videos.items.find(v => v.extension === 'mp4')
-      || data.videos.items[0];
-
-    const safeTitle = data.title?.replace(/[<>:"/\\|?*]/g, '').substring(0, 100) || videoId;
-
-    res.json({
-      url: video.url,
-      title: safeTitle,
-      quality: video.quality,
-      extension: video.extension || 'mp4'
-    });
-
-  } catch (error) {
-    console.error('[API] Video URL error:', error);
-    res.status(500).json({ error: 'Failed to get video URL' });
-  }
-});
-
-// YouTube video clip endpoint - download and trim video segments
-const execAsync = promisify(exec);
-
-app.post('/api/youtube/clip/:videoId', express.json(), async (req, res) => {
-  const { videoId } = req.params;
-  const { clips } = req.body; // Array of { start: "0:30", end: "1:30" }
-
-  if (!videoId || videoId.length !== 11) {
-    return res.status(400).json({ error: 'Invalid video ID' });
-  }
-
-  if (!clips || !Array.isArray(clips) || clips.length === 0) {
-    return res.status(400).json({ error: 'No clips specified' });
-  }
-
-  if (!RAPIDAPI_KEY) {
-    return res.status(500).json({ error: 'Video download service not configured' });
-  }
-
-  // Validate clip timestamps
-  const timeRegex = /^(\d+:)?(\d{1,2}):(\d{2})$|^(\d+)$/;
-  for (const clip of clips) {
-    if (!clip.start || !clip.end) {
-      return res.status(400).json({ error: 'Each clip must have start and end timestamps' });
-    }
-    if (!timeRegex.test(clip.start) || !timeRegex.test(clip.end)) {
-      return res.status(400).json({ error: 'Invalid timestamp format. Use MM:SS or HH:MM:SS' });
-    }
-  }
-
-  const tempDir = join(__dirname, 'temp');
-  if (!existsSync(tempDir)) {
-    mkdirSync(tempDir, { recursive: true });
-  }
-
-  const sessionId = Date.now().toString();
-  const clipFiles = [];
-
-  try {
-    console.log(`[API] Creating ${clips.length} clip(s) for video: ${videoId}`);
-
-    // Get video download URL from RapidAPI
-    const apiUrl = `https://youtube-media-downloader.p.rapidapi.com/v2/video/details?videoId=${videoId}`;
-    const apiResponse = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
-        'x-rapidapi-key': RAPIDAPI_KEY
-      }
-    });
-
-    if (!apiResponse.ok) {
-      throw new Error(`RapidAPI error: ${apiResponse.status}`);
-    }
-
-    const data = await apiResponse.json();
-    let downloadUrl;
-    let videoTitle = videoId;
-
-    if (data.videos?.items && data.videos.items.length > 0) {
-      const video = data.videos.items.find(v => v.quality === '720p' && v.extension === 'mp4')
-        || data.videos.items.find(v => v.extension === 'mp4')
-        || data.videos.items[0];
-      downloadUrl = video.url;
-      if (data.title) {
-        videoTitle = data.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 50);
-      }
-    }
-
-    if (!downloadUrl) {
-      return res.status(404).json({ error: 'No download URL available for this video' });
-    }
-
-    console.log('[API] Download URL:', downloadUrl.substring(0, 100) + '...');
-
-    // Create each clip using FFmpeg directly from URL (FFmpeg handles HTTP better)
-    // Using -ss before -i for fast seeking
-    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-    for (let i = 0; i < clips.length; i++) {
-      const clip = clips[i];
-      const clipFile = join(tempDir, `${sessionId}_clip_${i + 1}.mp4`);
-      clipFiles.push({ file: clipFile, start: clip.start, end: clip.end });
-
-      console.log(`[API] Creating clip ${i + 1}/${clips.length}: ${clip.start} - ${clip.end}`);
-
-      // FFmpeg command with headers and direct URL input
-      const ffmpegCmd = `ffmpeg -y -user_agent "${userAgent}" -referer "https://www.youtube.com/" -ss ${clip.start} -i "${downloadUrl}" -to ${clip.end} -c copy "${clipFile}"`;
-
-      try {
-        await execAsync(ffmpegCmd, { timeout: 120000 }); // 2 minute timeout per clip
-      } catch (ffmpegError) {
-        console.error(`[API] FFmpeg error for clip ${i + 1}:`, ffmpegError.message);
-        throw new Error(`Failed to create clip ${i + 1}: ${ffmpegError.message}`);
-      }
-    }
-
-    console.log('[API] All clips created');
-
-    // If single clip, send it directly
-    if (clips.length === 1) {
-      const clipFile = clipFiles[0].file;
-      const safeStart = clips[0].start.replace(/:/g, '-');
-      const safeEnd = clips[0].end.replace(/:/g, '-');
-      const filename = `${videoTitle}_${safeStart}_to_${safeEnd}.mp4`;
-
-      res.setHeader('Content-Type', 'video/mp4');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-      const clipStream = createReadStream(clipFile);
-      clipStream.pipe(res);
-
-      clipStream.on('end', () => {
-        // Cleanup temp files
-        try {
-          unlinkSync(clipFile);
-        } catch (e) {
-          console.log('[API] Cleanup error:', e.message);
-        }
-      });
-
-      return;
-    }
-
-    // Multiple clips: create a zip file
-    const JSZip = (await import('jszip')).default;
-    const zip = new JSZip();
-
-    for (let i = 0; i < clipFiles.length; i++) {
-      const { file, start, end } = clipFiles[i];
-      const safeStart = start.replace(/:/g, '-');
-      const safeEnd = end.replace(/:/g, '-');
-      const clipName = `${videoTitle}_clip${i + 1}_${safeStart}_to_${safeEnd}.mp4`;
-      const clipData = readFileSync(file);
-      zip.file(clipName, clipData);
-    }
-
-    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${videoTitle}_clips.zip"`);
-    res.send(zipBuffer);
-
-    // Cleanup temp files
-    try {
-      for (const { file } of clipFiles) {
-        unlinkSync(file);
-      }
-    } catch (e) {
-      console.log('[API] Cleanup error:', e.message);
-    }
-
-  } catch (error) {
-    console.error('[API] Clip creation error:', error);
-
-    // Cleanup on error
-    try {
-      for (const { file } of clipFiles) {
-        if (existsSync(file)) unlinkSync(file);
-      }
-    } catch (e) {}
-
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to create video clips. Please try again.' });
+      res.status(500).json({ error: 'Failed to download video: ' + error.message });
     }
   }
 });
