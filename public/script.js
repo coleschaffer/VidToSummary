@@ -625,10 +625,8 @@ window.downloadVideo = async function(index, event) {
   const btn = event.currentTarget;
   const originalHTML = btn.innerHTML;
 
-  const showStatus = (msg) => {
-    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>${msg ? ` ${msg}` : ''}`;
-  };
-  showStatus('');
+  // Show spinner
+  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>';
   btn.disabled = true;
 
   try {
@@ -647,13 +645,6 @@ window.downloadVideo = async function(index, event) {
       await new Promise(r => setTimeout(r, 2000)); // Poll every 2 seconds
       elapsed += 2;
 
-      // Update status display
-      if (elapsed >= 10) {
-        const mins = Math.floor(elapsed / 60);
-        const secs = elapsed % 60;
-        showStatus(mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `${secs}s`);
-      }
-
       const statusResponse = await fetch(`/api/youtube/download-status/${jobId}`);
       if (!statusResponse.ok) {
         throw new Error('Failed to check download status');
@@ -663,7 +654,6 @@ window.downloadVideo = async function(index, event) {
 
       if (status.status === 'ready') {
         console.log('[Download] Ready:', status.filename, `(${(status.fileSize / 1024 / 1024).toFixed(1)}MB)`);
-        showStatus('Saving...');
 
         // Download the file
         const fileResponse = await fetch(`/api/youtube/download-file/${jobId}`);
@@ -762,16 +752,17 @@ window.downloadAllVideos = async function(event) {
   let completed = 0;
   let failed = 0;
 
-  const updateStatus = (current, status) => {
-    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${current}/${youtubeVideos.length}${status ? ` ${status}` : ''}`;
+  // Show spinner with count
+  const updateStatus = (current) => {
+    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${current}/${youtubeVideos.length}`;
   };
 
-  updateStatus(0, '');
+  updateStatus(0);
 
   // Download videos sequentially using job queue
   for (let i = 0; i < youtubeVideos.length; i++) {
     const video = youtubeVideos[i];
-    updateStatus(i + 1, 'processing...');
+    updateStatus(i + 1);
 
     try {
       // Start download job
