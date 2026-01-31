@@ -651,6 +651,35 @@ app.post('/api/youtube/transcript', async (req, res) => {
   }
 });
 
+// Download Meta Ad video using yt-dlp
+async function downloadMetaAdVideo(adId) {
+  const proxyUrl = getProxyUrl();
+  const tempDir = join(__dirname, 'temp');
+  if (!existsSync(tempDir)) mkdirSync(tempDir, { recursive: true });
+  const tempFile = join(tempDir, `metaad_${adId}_${Date.now()}.mp4`);
+
+  const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.facebook.com/ads/library/?id=${adId}"`;
+
+  console.log(`[API] Running yt-dlp for Meta Ad ${adId}...`);
+  await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 min timeout
+  return tempFile;
+}
+
+// Get Meta Ad title using yt-dlp
+async function getMetaAdTitle(adId) {
+  const proxyUrl = getProxyUrl();
+  const cmd = `yt-dlp --proxy "${proxyUrl}" --no-check-certificates --get-title "https://www.facebook.com/ads/library/?id=${adId}"`;
+
+  try {
+    const { stdout } = await execAsync(cmd, { timeout: 30000 });
+    return stdout.trim()
+      .replace(/[<>:"/\\|?*]/g, '')
+      .substring(0, 100) || `Meta Ad ${adId}`;
+  } catch {
+    return `Meta Ad ${adId}`;
+  }
+}
+
 // Meta Ads transcript endpoint
 app.post('/api/metaads/transcript', async (req, res) => {
   const { url } = req.body;
@@ -670,24 +699,69 @@ app.post('/api/metaads/transcript', async (req, res) => {
   const adId = match[1];
   console.log(`[API] Fetching Meta Ad transcript for ad ID: ${adId}`);
 
+  // Check proxy config
+  if (!DECODO_PROXY_USER || !DECODO_PROXY_PASS) {
+    return res.status(500).json({ error: 'Proxy not configured for Meta Ads downloads' });
+  }
+
+  let tempFile = null;
+
   try {
-    // Note: Meta Ad Library doesn't provide a public API for video transcripts.
-    // This would require either:
-    // 1. Using Facebook Graph API with proper authentication
-    // 2. Web scraping the video URL and then transcribing with AssemblyAI
-    // 3. Using a third-party service that provides Meta Ads data
+    // 1. Download video using yt-dlp
+    console.log(`[API] Downloading Meta Ad video: ${adId}`);
+    tempFile = await downloadMetaAdVideo(adId);
 
-    // For now, return an informative error about the implementation status
-    // This endpoint structure is ready for when the proper API integration is added
+    if (!existsSync(tempFile)) {
+      throw new Error('Download completed but file not found');
+    }
 
-    return res.status(501).json({
-      error: 'Meta Ad transcript fetching is not yet implemented. This requires Facebook Graph API authentication or a specialized third-party service.',
+    // 2. Get ad title
+    const title = await getMetaAdTitle(adId);
+    console.log(`[API] Meta Ad title: ${title}`);
+
+    // 3. Upload to AssemblyAI and transcribe
+    console.log(`[API] Uploading to AssemblyAI...`);
+    const uploadUrl = await assemblyai.files.upload(tempFile);
+    console.log(`[API] Upload complete, submitting transcription...`);
+
+    const transcriptRequest = await assemblyai.transcripts.submit({ audio_url: uploadUrl });
+
+    // 4. Poll for completion
+    let transcript;
+    let pollCount = 0;
+    while (true) {
+      transcript = await assemblyai.transcripts.get(transcriptRequest.id);
+      pollCount++;
+
+      if (transcript.status === 'completed') {
+        console.log(`[API] Transcription complete after ${pollCount} polls`);
+        break;
+      }
+      if (transcript.status === 'error') {
+        throw new Error(transcript.error || 'Transcription failed');
+      }
+
+      console.log(`[API] Transcription status: ${transcript.status} (poll ${pollCount})`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    // 5. Clean up temp file
+    try { unlinkSync(tempFile); } catch {}
+
+    // 6. Return result (same format as YouTube)
+    res.json({
+      transcript: transcript.text,
       adId: adId,
-      suggestion: 'Please download the video manually and use the "Upload File" option to transcribe it.'
+      title: title,
+      source: 'metaads'
     });
 
   } catch (error) {
     console.error('[API] Meta Ads transcript error:', error);
+    // Clean up temp file on error
+    if (tempFile) {
+      try { unlinkSync(tempFile); } catch {}
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -810,6 +884,146 @@ app.get('/api/youtube/download-status/:jobId', (req, res) => {
 
 // Download ready file
 app.get('/api/youtube/download-file/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const job = videoDownloadJobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  if (job.status !== 'ready') {
+    return res.status(400).json({ error: 'File not ready yet' });
+  }
+
+  if (!existsSync(job.filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Disposition', `attachment; filename="${job.filename}"; filename*=UTF-8''${encodeURIComponent(job.filename)}`);
+  res.setHeader('Content-Length', job.fileSize);
+
+  const fileStream = createReadStream(job.filePath);
+
+  fileStream.on('end', () => {
+    console.log(`[API] [${jobId}] File sent successfully`);
+    // Clean up
+    try { unlinkSync(job.filePath); } catch (e) {}
+    videoDownloadJobs.delete(jobId);
+  });
+
+  fileStream.on('error', (err) => {
+    console.error(`[API] [${jobId}] Stream error:`, err.message);
+  });
+
+  fileStream.pipe(res);
+});
+
+// ==================== META ADS VIDEO DOWNLOAD ====================
+
+// Start Meta Ad video download job - returns immediately with job ID
+app.post('/api/metaads/download-start/:adId', async (req, res) => {
+  const { adId } = req.params;
+
+  if (!adId || !/^\d+$/.test(adId)) {
+    return res.status(400).json({ error: 'Invalid ad ID' });
+  }
+
+  if (!DECODO_PROXY_USER || !DECODO_PROXY_PASS) {
+    return res.status(500).json({ error: 'Video download proxy not configured' });
+  }
+
+  const jobId = `dl_metaad_${adId}_${Date.now()}`;
+  const tempDir = join(__dirname, 'temp');
+  if (!existsSync(tempDir)) mkdirSync(tempDir, { recursive: true });
+  const tempFile = join(tempDir, `${jobId}.mp4`);
+
+  // Create job entry
+  videoDownloadJobs.set(jobId, {
+    adId,
+    status: 'processing',
+    filePath: tempFile,
+    filename: `Meta Ad ${adId}.mp4`,
+    createdAt: Date.now(),
+    error: null
+  });
+
+  // Return job ID immediately
+  res.json({ jobId });
+
+  // Process download in background
+  (async () => {
+    const job = videoDownloadJobs.get(jobId);
+    try {
+      console.log(`[API] [${jobId}] Starting download for Meta Ad: ${adId}`);
+
+      const proxyUrl = getProxyUrl();
+      console.log(`[API] [${jobId}] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
+
+      const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.facebook.com/ads/library/?id=${adId}"`;
+
+      const startTime = Date.now();
+      await execAsync(ytdlpCmd, { timeout: 300000 });
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[API] [${jobId}] yt-dlp completed in ${elapsed}s`);
+
+      if (!existsSync(tempFile)) {
+        throw new Error('Download completed but file not found');
+      }
+
+      // Get ad title for filename
+      try {
+        const title = await getMetaAdTitle(adId);
+        if (title && title !== `Meta Ad ${adId}`) {
+          const safeTitle = title
+            .replace(/[\x00-\x1f\x7f-\x9f]/g, '')
+            .replace(/[<>:"/\\|?*#%&{}$!'`@=+]/g, '')
+            .replace(/[^\x20-\x7E]/g, '')
+            .trim()
+            .substring(0, 100);
+          if (safeTitle) job.filename = `${safeTitle}.mp4`;
+        }
+      } catch (e) {
+        console.log(`[API] [${jobId}] Could not get title:`, e.message);
+      }
+
+      const fsPromises = await import('fs/promises');
+      const stats = await fsPromises.stat(tempFile);
+      job.fileSize = stats.size;
+      job.status = 'ready';
+      console.log(`[API] [${jobId}] Ready: ${job.filename} (${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
+
+    } catch (error) {
+      console.error(`[API] [${jobId}] Failed:`, error.message);
+      job.status = 'failed';
+      job.error = error.message;
+      if (existsSync(tempFile)) {
+        try { unlinkSync(tempFile); } catch (e) {}
+      }
+    }
+  })();
+});
+
+// Check Meta Ad download job status
+app.get('/api/metaads/download-status/:jobId', (req, res) => {
+  const { jobId } = req.params;
+  const job = videoDownloadJobs.get(jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  res.json({
+    status: job.status,
+    filename: job.filename,
+    fileSize: job.fileSize,
+    error: job.error
+  });
+});
+
+// Download ready Meta Ad file
+app.get('/api/metaads/download-file/:jobId', (req, res) => {
   const { jobId } = req.params;
   const job = videoDownloadJobs.get(jobId);
 

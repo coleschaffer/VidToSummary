@@ -890,9 +890,9 @@ function renderResults() {
   if (!transcriptions.length) { resultsSection.classList.remove('visible'); return; }
   resultsSection.classList.add('visible');
   const hasMultiple = transcriptions.length > 1;
-  const youtubeVideos = transcriptions.filter(t => t.source === 'youtube' && t.videoId);
+  const downloadableVideos = transcriptions.filter(t => (t.source === 'youtube' || t.source === 'metaads') && t.videoId);
   const downloadTranscriptsBtn = hasMultiple ? `<button class="btn-icon-text" onclick="downloadAllTranscriptsZip(event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download Transcripts</button>` : '';
-  const downloadVideosBtn = youtubeVideos.length > 0 ? `<button class="btn-icon-text" onclick="downloadAllVideos(event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg>Download Videos</button>` : '';
+  const downloadVideosBtn = downloadableVideos.length > 0 ? `<button class="btn-icon-text" onclick="downloadAllVideos(event)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg>Download Videos</button>` : '';
   resultsList.innerHTML = `
     <div class="results-header"><span class="results-count">${transcriptions.length} transcription${transcriptions.length > 1 ? 's' : ''}</span><div class="header-buttons">${downloadTranscriptsBtn}${downloadVideosBtn}</div></div>
     ${transcriptions.map((item, i) => `
@@ -906,6 +906,7 @@ function renderResults() {
           <button class="btn-icon" onclick="copyText(${i}, 'transcript', event)" title="Copy"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
           <button class="btn-icon" onclick="downloadText(${i}, 'transcript', event)" title="Download Transcript"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>
           ${item.source === 'youtube' && item.videoId ? `<button class="btn-icon" onclick="downloadVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button><button class="btn-icon" onclick="openClipModal(${i}, event)" title="Create Clips"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
+          ${item.source === 'metaads' && item.videoId ? `<button class="btn-icon" onclick="downloadMetaAdVideo(${i}, event)" title="Download Video"><svg class="icon-default" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 8 16 12 10 16 10 8"/></svg><svg class="icon-success" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></button>` : ''}
         </div>
         <div class="transcription-text">${item.transcription}</div>
       </div>
@@ -1029,6 +1030,81 @@ window.downloadVideo = async function(index, event) {
   }
 };
 
+window.downloadMetaAdVideo = async function(index, event) {
+  event.stopPropagation();
+  const item = transcriptions[index];
+  if (!item || !item.videoId || item.source !== 'metaads') return;
+
+  const btn = event.currentTarget;
+  const originalHTML = btn.innerHTML;
+
+  // Show spinner
+  btn.innerHTML = '<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>';
+  btn.disabled = true;
+
+  try {
+    // Start the download job
+    const startResponse = await fetch(`/api/metaads/download-start/${item.videoId}`, { method: 'POST' });
+    if (!startResponse.ok) {
+      const error = await startResponse.json().catch(() => ({ error: 'Failed to start download' }));
+      throw new Error(error.error);
+    }
+    const { jobId } = await startResponse.json();
+    console.log('[Download Meta Ad] Job started:', jobId);
+
+    // Poll for completion (works even when tab is in background)
+    let elapsed = 0;
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000)); // Poll every 2 seconds
+      elapsed += 2;
+
+      const statusResponse = await fetch(`/api/metaads/download-status/${jobId}`);
+      if (!statusResponse.ok) {
+        throw new Error('Failed to check download status');
+      }
+
+      const status = await statusResponse.json();
+
+      if (status.status === 'ready') {
+        console.log('[Download Meta Ad] Ready:', status.filename, `(${(status.fileSize / 1024 / 1024).toFixed(1)}MB)`);
+
+        // Download the file
+        const fileResponse = await fetch(`/api/metaads/download-file/${jobId}`);
+        if (!fileResponse.ok) {
+          throw new Error('Failed to download file');
+        }
+
+        const blob = await fileResponse.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = status.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        break;
+      } else if (status.status === 'failed') {
+        throw new Error(status.error || 'Download failed');
+      }
+
+      // Timeout after 10 minutes
+      if (elapsed > 600) {
+        throw new Error('Download timed out');
+      }
+    }
+
+    btn.innerHTML = originalHTML;
+    btn.disabled = false;
+    showSuccess(btn);
+  } catch (error) {
+    console.error('[Download Meta Ad] Error:', error.message);
+    btn.innerHTML = originalHTML;
+    btn.disabled = false;
+    alert('Download failed: ' + error.message);
+  }
+};
+
 function downloadFile(content, filename) {
   const blob = new Blob([content], { type: 'text/plain' });
   const a = document.createElement('a');
@@ -1085,25 +1161,28 @@ window.downloadAllVideos = async function(event) {
   const originalHTML = btn.innerHTML;
   btn.disabled = true;
 
-  const youtubeVideos = transcriptions.filter(t => t.source === 'youtube' && t.videoId);
+  const downloadableVideos = transcriptions.filter(t => (t.source === 'youtube' || t.source === 'metaads') && t.videoId);
   let completed = 0;
   let failed = 0;
 
   // Show spinner with count
   const updateStatus = (current) => {
-    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${current}/${youtubeVideos.length}`;
+    btn.innerHTML = `<svg class="spinner-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg> ${current}/${downloadableVideos.length}`;
   };
 
   updateStatus(0);
 
   // Download videos sequentially using job queue
-  for (let i = 0; i < youtubeVideos.length; i++) {
-    const video = youtubeVideos[i];
+  for (let i = 0; i < downloadableVideos.length; i++) {
+    const video = downloadableVideos[i];
     updateStatus(i + 1);
+
+    // Determine API base path based on source
+    const apiBase = video.source === 'metaads' ? '/api/metaads' : '/api/youtube';
 
     try {
       // Start download job
-      const startResponse = await fetch(`/api/youtube/download-start/${video.videoId}`, { method: 'POST' });
+      const startResponse = await fetch(`${apiBase}/download-start/${video.videoId}`, { method: 'POST' });
       if (!startResponse.ok) throw new Error('Failed to start');
       const { jobId } = await startResponse.json();
 
@@ -1113,12 +1192,12 @@ window.downloadAllVideos = async function(event) {
         await new Promise(r => setTimeout(r, 2000));
         elapsed += 2;
 
-        const statusResponse = await fetch(`/api/youtube/download-status/${jobId}`);
+        const statusResponse = await fetch(`${apiBase}/download-status/${jobId}`);
         const status = await statusResponse.json();
 
         if (status.status === 'ready') {
           // Download the file
-          const fileResponse = await fetch(`/api/youtube/download-file/${jobId}`);
+          const fileResponse = await fetch(`${apiBase}/download-file/${jobId}`);
           if (!fileResponse.ok) throw new Error('Failed to download');
 
           const blob = await fileResponse.blob();
