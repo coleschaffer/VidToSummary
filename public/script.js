@@ -1028,11 +1028,12 @@ window.downloadClips = async function() {
 
       console.log(`[Clips] Creating clip ${i + 1}: ${clip.start} to ${clip.end} (${duration}s)`);
 
-      // FFmpeg command: -ss to seek, -t for duration
+      // FFmpeg command: -ss to seek, -t for duration, -map 0 to include all streams
       await ffmpeg.exec([
         '-ss', clip.start,
         '-i', inputName,
         '-t', duration.toString(),
+        '-map', '0',
         '-c', 'copy',
         '-y', outputName
       ]);

@@ -679,14 +679,26 @@ app.get('/api/youtube/download/:videoId', async (req, res) => {
     let downloadUrl;
     let filename = `${videoId}.mp4`;
 
+    // Log available formats for debugging
+    console.log('[API] Available video formats:', JSON.stringify(data.videos?.items?.map(v => ({
+      quality: v.quality,
+      extension: v.extension,
+      hasAudio: v.hasAudio,
+      audioChannels: v.audioChannels
+    })) || []).substring(0, 500));
+
     if (data.videos?.items && data.videos.items.length > 0) {
-      // Look for 720p first, then fall back to other qualities
-      const video = data.videos.items.find(v => v.quality === '720p' && v.extension === 'mp4')
-        || data.videos.items.find(v => v.extension === 'mp4')
-        || data.videos.items[0];
+      // Prefer formats with audio (hasAudio or audioChannels property)
+      const withAudio = data.videos.items.filter(v => v.hasAudio || v.audioChannels);
+      const candidates = withAudio.length > 0 ? withAudio : data.videos.items;
+
+      // Look for 720p mp4 first, then any mp4, then fallback
+      const video = candidates.find(v => v.quality === '720p' && v.extension === 'mp4')
+        || candidates.find(v => v.extension === 'mp4')
+        || candidates[0];
 
       downloadUrl = video.url;
-      console.log('[API] Selected quality:', video.quality, video.extension);
+      console.log('[API] Selected:', video.quality, video.extension, 'hasAudio:', video.hasAudio, 'audioChannels:', video.audioChannels);
       if (data.title) {
         const safeTitle = data.title.replace(/[<>:"/\\|?*]/g, '').substring(0, 100);
         filename = `${safeTitle}.${video.extension || 'mp4'}`;
