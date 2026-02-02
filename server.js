@@ -164,6 +164,19 @@ ${chunk}`
   }
 }
 
+// Decode HTML entities in transcript text
+function decodeHtmlEntities(text) {
+  return text
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&nbsp;/g, ' ');
+}
+
 // Detect if text is likely English based on common words
 function isLikelyEnglish(text) {
   const sample = text.slice(0, 2000).toLowerCase();
@@ -649,7 +662,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
     }
 
     res.json({
-      transcript: transcript,
+      transcript: decodeHtmlEntities(transcript),
       lang: 'en',
       videoId: videoId,
       title: title,
