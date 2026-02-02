@@ -132,13 +132,12 @@ ${text}`
       chunks.push(text.slice(i, i + CHUNK_SIZE));
     }
 
-    console.log(`[API] Splitting into ${chunks.length} chunks for translation`);
+    console.log(`[API] Splitting into ${chunks.length} chunks for parallel translation`);
 
-    const translatedChunks = [];
-    for (let i = 0; i < chunks.length; i++) {
-      console.log(`[API] Translating chunk ${i + 1}/${chunks.length}`);
-
-      const response = await anthropic.messages.create({
+    // Translate all chunks in parallel for faster processing
+    const translationPromises = chunks.map((chunk, i) => {
+      console.log(`[API] Starting translation of chunk ${i + 1}/${chunks.length}`);
+      return anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 8000,
         messages: [{
@@ -146,15 +145,16 @@ ${text}`
           content: `Translate the following transcript segment from ${sourceLang} to English. This is part ${i + 1} of ${chunks.length}. Provide only the translated text, maintaining the original formatting. Do not add any explanations, notes, or segment markers.
 
 Transcript segment:
-${chunks[i]}`
+${chunk}`
         }]
       });
+    });
 
-      translatedChunks.push(response.content[0].text);
-    }
+    const responses = await Promise.all(translationPromises);
+    const translatedChunks = responses.map(r => r.content[0].text);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`[API] Translation complete in ${elapsed}s (${chunks.length} chunks)`);
+    console.log(`[API] Translation complete in ${elapsed}s (${chunks.length} chunks in parallel)`);
 
     return translatedChunks.join(' ');
   } catch (error) {
