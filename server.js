@@ -164,9 +164,21 @@ ${chunk}`
   }
 }
 
+// Detect if text is likely English based on common words
+function isLikelyEnglish(text) {
+  const sample = text.slice(0, 2000).toLowerCase();
+  const englishWords = ['the', 'and', 'that', 'have', 'for', 'not', 'with', 'you', 'this', 'but', 'from', 'they', 'would', 'there', 'their', 'what', 'about', 'which', 'when', 'make', 'like', 'just', 'know', 'take', 'people', 'into', 'could', 'time', 'some', 'than', 'them', 'look', 'only', 'come', 'over', 'think', 'also'];
+  const matches = englishWords.filter(word => {
+    const regex = new RegExp(`\\b${word}\\b`, 'g');
+    return (sample.match(regex) || []).length >= 2;
+  });
+  // If 10+ common English words appear at least twice each, it's likely English
+  return matches.length >= 10;
+}
+
 // Fetch transcript from Supadata with language preference
-async function fetchSupadataTranscript(url, lang) {
-  const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=${lang}`;
+async function fetchSupadataTranscript(url, lang, mode = 'auto') {
+  const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=${lang}&mode=${mode}`;
   const response = await fetch(supadataUrl, {
     method: 'GET',
     headers: { 'x-api-key': SUPADATA_API_KEY }
@@ -187,7 +199,7 @@ async function fetchSupadataTranscript(url, lang) {
       const pollData = await pollResponse.json();
 
       if (pollData.status === 'completed') {
-        return { content: pollData.content, lang: pollData.lang };
+        return { content: pollData.content, lang: pollData.lang, availableLangs: pollData.availableLangs || [] };
       } else if (pollData.status === 'failed') {
         throw new Error('Supadata transcription failed');
       }
@@ -205,7 +217,7 @@ async function fetchSupadataTranscript(url, lang) {
   }
 
   const data = await response.json();
-  return { content: data.content, lang: data.lang };
+  return { content: data.content, lang: data.lang, availableLangs: data.availableLangs || [] };
 }
 
 // IMPORTANT: Enable SharedArrayBuffer for FFmpeg.wasm
@@ -592,27 +604,18 @@ app.post('/api/youtube/transcript', async (req, res) => {
   console.log(`[API] Fetching YouTube transcript for: ${url}`);
 
   try {
-    // Try to get English transcript (en first, then en-US fallback)
-    let result;
+    // Fetch transcript with mode=auto (tries native captions, falls back to AI generation)
+    console.log('[API] Fetching transcript with lang=en, mode=auto');
+    let result = await fetchSupadataTranscript(url, 'en', 'auto');
+    console.log(`[API] Got transcript: ${result.content?.length || 0} chars, lang: ${result.lang}, availableLangs: ${result.availableLangs?.join(', ') || 'none'}`);
 
-    // First try with 'en'
-    console.log('[API] Trying transcript with lang=en');
-    result = await fetchSupadataTranscript(url, 'en');
-    console.log(`[API] Got transcript: ${result.content?.length || 0} chars, lang: ${result.lang}`);
-
-    // If not English, try en-US as fallback
-    if (result.lang && !result.lang.startsWith('en')) {
-      console.log('[API] Not English, trying lang=en-US fallback');
-      try {
-        const fallbackResult = await fetchSupadataTranscript(url, 'en-US');
-        if (fallbackResult.lang?.startsWith('en')) {
-          result = fallbackResult;
-          console.log(`[API] en-US fallback successful: ${result.content?.length || 0} chars`);
-        } else {
-          console.log(`[API] en-US fallback also returned ${fallbackResult.lang}, will translate`);
-        }
-      } catch (e) {
-        console.log(`[API] en-US fallback failed: ${e.message}, will translate original`);
+    // If we didn't get English but English is available, fetch it specifically
+    if (result.lang && !result.lang.startsWith('en') && result.availableLangs?.length > 0) {
+      const englishLang = result.availableLangs.find(l => l.startsWith('en'));
+      if (englishLang) {
+        console.log(`[API] English available as '${englishLang}', fetching specifically`);
+        result = await fetchSupadataTranscript(url, englishLang, 'auto');
+        console.log(`[API] Got English transcript: ${result.content?.length || 0} chars`);
       }
     }
 
@@ -631,11 +634,18 @@ app.post('/api/youtube/transcript', async (req, res) => {
       console.log(`[API] Could not fetch video title: ${e.message}`);
     }
 
-    // Translate to English if still not in English
+    // Determine if translation is needed
     let transcript = result.content;
-    if (result.lang && !result.lang.startsWith('en')) {
+    const labeledAsEnglish = result.lang?.startsWith('en');
+    const contentIsEnglish = isLikelyEnglish(transcript);
+
+    if (!labeledAsEnglish && !contentIsEnglish) {
+      // Not English by label or content - translate
       console.log(`[API] Translating transcript from ${result.lang} to English`);
       transcript = await translateToEnglish(transcript, result.lang);
+    } else if (!labeledAsEnglish && contentIsEnglish) {
+      // Mislabeled - content is already English, skip translation
+      console.log(`[API] Transcript labeled as '${result.lang}' but content is English - skipping translation`);
     }
 
     res.json({
