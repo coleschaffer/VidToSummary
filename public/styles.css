@@ -584,6 +584,25 @@ h3 {
 .result-title {
   font-size: 0.875rem;
   font-weight: 500;
+  flex: 1;
+}
+
+.result-url-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.result-url-btn:hover {
+  color: var(--primary);
+  background: var(--surface-2);
 }
 
 .result-toggle {
