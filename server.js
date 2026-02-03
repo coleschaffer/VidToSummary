@@ -212,15 +212,33 @@ async function downloadLiveStreamAudio(url, durationSeconds = 120) {
   if (!existsSync(tempDir)) mkdirSync(tempDir, { recursive: true });
 
   const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || Date.now();
-  const tempFile = join(tempDir, `livestream_${videoId}_${Date.now()}.mp3`);
+  const timestamp = Date.now();
+  const rawFile = join(tempDir, `livestream_raw_${videoId}_${timestamp}.%(ext)s`);
+  const outputFile = join(tempDir, `livestream_${videoId}_${timestamp}.mp3`);
 
-  // Download audio only, limited duration, best audio quality
-  const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestaudio" --extract-audio --audio-format mp3 --download-sections "*0-${durationSeconds}" -o "${tempFile}" --no-playlist --no-check-certificates "${url}"`;
+  // For live streams: download with flexible format, use external downloader with duration limit
+  // Using ffmpeg as external downloader allows us to limit recording duration
+  const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestaudio*/best" --external-downloader ffmpeg --external-downloader-args "ffmpeg:-t ${durationSeconds}" -o "${rawFile}" --no-playlist --no-check-certificates "${url}"`;
 
   console.log(`[API] Downloading ${durationSeconds}s of live stream audio...`);
-  await execAsync(ytdlpCmd, { timeout: 180000 }); // 3 min timeout
+  await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 min timeout for live streams
 
-  return tempFile;
+  // Find the downloaded file (extension may vary)
+  const files = await execAsync(`ls ${tempDir}/livestream_raw_${videoId}_${timestamp}.*`);
+  const downloadedFile = files.stdout.trim().split('\n')[0];
+
+  if (!downloadedFile || !existsSync(downloadedFile)) {
+    throw new Error('Live stream download completed but file not found');
+  }
+
+  // Convert to mp3 for AssemblyAI
+  console.log('[API] Converting live stream audio to mp3...');
+  await execAsync(`ffmpeg -i "${downloadedFile}" -vn -acodec libmp3lame -q:a 2 "${outputFile}" -y`, { timeout: 60000 });
+
+  // Clean up raw file
+  try { unlinkSync(downloadedFile); } catch {}
+
+  return outputFile;
 }
 
 // Transcribe a live YouTube stream using yt-dlp + AssemblyAI
