@@ -793,8 +793,10 @@ app.post('/api/youtube/transcript', async (req, res) => {
   } catch (error) {
     console.error('[API] YouTube transcript error:', error);
 
-    // Check if this might be a live stream (400 error from Supadata)
-    const mightBeLive = error.message.includes('400') || error.message.toLowerCase().includes('live');
+    // Check if this might be a live stream (400 error, "Invalid Request", or "live" in message)
+    const mightBeLive = error.message.includes('400') ||
+                        error.message.toLowerCase().includes('live') ||
+                        error.message.toLowerCase().includes('invalid request');
 
     if (mightBeLive) {
       console.log('[API] Supadata failed, checking if video is live...');
