@@ -223,10 +223,24 @@ async function fetchSupadataTranscript(url, lang, mode = 'auto') {
 
   // Handle errors
   if (!response.ok) {
+    let errorMsg = `Supadata API error: ${response.status}`;
+    try {
+      const errorBody = await response.json();
+      if (errorBody.error) errorMsg = errorBody.error;
+      if (errorBody.message) errorMsg = errorBody.message;
+    } catch (e) { /* ignore parse errors */ }
+
     if (response.status === 206) throw new Error('No transcript available for this video');
     if (response.status === 404) throw new Error('Video not found or is private');
     if (response.status === 403) throw new Error('Video requires authentication or is restricted');
-    throw new Error(`Supadata API error: ${response.status}`);
+    if (response.status === 400) {
+      // 400 often means live stream or unsupported video type
+      if (errorMsg.toLowerCase().includes('live')) {
+        throw new Error('Live streams do not have transcripts until the stream ends and is archived');
+      }
+      throw new Error(errorMsg || 'Video may be a live stream or unsupported format');
+    }
+    throw new Error(errorMsg);
   }
 
   const data = await response.json();
@@ -670,7 +684,14 @@ app.post('/api/youtube/transcript', async (req, res) => {
     });
   } catch (error) {
     console.error('[API] YouTube transcript error:', error);
-    res.status(500).json({ error: error.message });
+
+    // Provide helpful messages for common errors
+    let errorMessage = error.message;
+    if (error.message.includes('400') || error.message.toLowerCase().includes('live')) {
+      errorMessage = 'This video may be a live stream. Live streams do not have transcripts until after the stream ends and YouTube processes the archive (usually 12-24 hours).';
+    }
+
+    res.status(500).json({ error: errorMessage });
   }
 });
 
