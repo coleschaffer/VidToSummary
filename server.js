@@ -189,6 +189,114 @@ function isLikelyEnglish(text) {
   return matches.length >= 10;
 }
 
+// Check if a YouTube video is a live stream using yt-dlp
+async function isYouTubeLive(url) {
+  try {
+    const proxyUrl = getProxyUrl();
+    const { stdout } = await execAsync(
+      `yt-dlp --proxy "${proxyUrl}" --dump-json --no-download "${url}"`,
+      { timeout: 30000 }
+    );
+    const info = JSON.parse(stdout);
+    return info.is_live === true || info.live_status === 'is_live';
+  } catch (error) {
+    console.log(`[API] Could not check live status: ${error.message}`);
+    return false;
+  }
+}
+
+// Download audio from a live YouTube stream (limited duration)
+async function downloadLiveStreamAudio(url, durationSeconds = 120) {
+  const proxyUrl = getProxyUrl();
+  const tempDir = join(__dirname, 'temp');
+  if (!existsSync(tempDir)) mkdirSync(tempDir, { recursive: true });
+
+  const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || Date.now();
+  const tempFile = join(tempDir, `livestream_${videoId}_${Date.now()}.mp3`);
+
+  // Download audio only, limited duration, best audio quality
+  const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestaudio" --extract-audio --audio-format mp3 --download-sections "*0-${durationSeconds}" -o "${tempFile}" --no-playlist --no-check-certificates "${url}"`;
+
+  console.log(`[API] Downloading ${durationSeconds}s of live stream audio...`);
+  await execAsync(ytdlpCmd, { timeout: 180000 }); // 3 min timeout
+
+  return tempFile;
+}
+
+// Transcribe a live YouTube stream using yt-dlp + AssemblyAI
+async function transcribeLiveStream(url) {
+  let tempFile = null;
+
+  try {
+    // 1. Download audio from live stream (2 minutes)
+    console.log('[API] Downloading live stream audio...');
+    tempFile = await downloadLiveStreamAudio(url, 120);
+
+    if (!existsSync(tempFile)) {
+      throw new Error('Live stream download completed but file not found');
+    }
+
+    // 2. Get video title
+    let title = 'Live Stream';
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const oembedResponse = await fetch(oembedUrl);
+      if (oembedResponse.ok) {
+        const oembedData = await oembedResponse.json();
+        title = oembedData.title || title;
+      }
+    } catch (e) {
+      console.log(`[API] Could not fetch live stream title: ${e.message}`);
+    }
+
+    // 3. Upload to AssemblyAI
+    console.log('[API] Uploading live stream audio to AssemblyAI...');
+    const uploadUrl = await assemblyai.files.upload(tempFile);
+    console.log('[API] Upload complete, submitting transcription...');
+
+    // 4. Submit transcription
+    const transcriptRequest = await assemblyai.transcripts.submit({ audio_url: uploadUrl });
+
+    // 5. Poll for completion
+    let transcript;
+    let pollCount = 0;
+    while (true) {
+      transcript = await assemblyai.transcripts.get(transcriptRequest.id);
+      pollCount++;
+
+      if (transcript.status === 'completed') {
+        console.log(`[API] Live stream transcription complete after ${pollCount} polls`);
+        break;
+      }
+      if (transcript.status === 'error') {
+        throw new Error(transcript.error || 'Live stream transcription failed');
+      }
+
+      console.log(`[API] Transcription status: ${transcript.status} (poll ${pollCount})`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    // 6. Clean up temp file
+    try { unlinkSync(tempFile); } catch {}
+
+    const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'live';
+
+    return {
+      transcript: transcript.text,
+      videoId: videoId,
+      title: title + ' (Live)',
+      source: 'youtube'
+    };
+
+  } catch (error) {
+    // Clean up on error
+    if (tempFile) {
+      try { unlinkSync(tempFile); } catch {}
+    }
+    throw error;
+  }
+}
+
 // Fetch transcript from Supadata with language preference
 async function fetchSupadataTranscript(url, lang, mode = 'auto') {
   const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=${lang}&mode=${mode}`;
@@ -685,13 +793,36 @@ app.post('/api/youtube/transcript', async (req, res) => {
   } catch (error) {
     console.error('[API] YouTube transcript error:', error);
 
-    // Provide helpful messages for common errors
-    let errorMessage = error.message;
-    if (error.message.includes('400') || error.message.toLowerCase().includes('live')) {
-      errorMessage = 'This video may be a live stream. Live streams do not have transcripts until after the stream ends and YouTube processes the archive (usually 12-24 hours).';
+    // Check if this might be a live stream (400 error from Supadata)
+    const mightBeLive = error.message.includes('400') || error.message.toLowerCase().includes('live');
+
+    if (mightBeLive) {
+      console.log('[API] Supadata failed, checking if video is live...');
+
+      try {
+        const isLive = await isYouTubeLive(url);
+
+        if (isLive) {
+          console.log('[API] Video is live! Using yt-dlp + AssemblyAI fallback...');
+          const result = await transcribeLiveStream(url);
+          return res.json({
+            transcript: result.transcript,
+            lang: 'en',
+            videoId: result.videoId,
+            title: result.title,
+            source: 'youtube',
+            isLive: true
+          });
+        }
+      } catch (liveError) {
+        console.error('[API] Live stream transcription failed:', liveError);
+        return res.status(500).json({
+          error: `Live stream transcription failed: ${liveError.message}. Try again or wait for the stream to end.`
+        });
+      }
     }
 
-    res.status(500).json({ error: errorMessage });
+    res.status(500).json({ error: error.message });
   }
 });
 
