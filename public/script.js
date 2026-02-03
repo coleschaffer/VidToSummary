@@ -649,8 +649,8 @@ async function fetchYoutubeTranscripts() {
 
   if (urls.length === 0) return;
 
-  // Validate all URLs
-  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
+  // Validate all URLs (supports watch, embed, v, live, and youtu.be formats)
+  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/|live\/)|youtu\.be\/)[\w-]+/;
   const invalidUrls = urls.filter(url => !youtubeRegex.test(url));
   if (invalidUrls.length > 0) {
     alert(`Invalid YouTube URL(s):\n${invalidUrls.join('\n')}`);

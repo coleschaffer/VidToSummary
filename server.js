@@ -211,7 +211,7 @@ async function downloadLiveStreamAudio(url, durationSeconds = 120) {
   const tempDir = join(__dirname, 'temp');
   if (!existsSync(tempDir)) mkdirSync(tempDir, { recursive: true });
 
-  const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || Date.now();
+  const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || Date.now();
   const tempFile = join(tempDir, `livestream_${videoId}_${Date.now()}.mp3`);
 
   // Download audio only, limited duration, best audio quality
@@ -279,7 +279,7 @@ async function transcribeLiveStream(url) {
     // 6. Clean up temp file
     try { unlinkSync(tempFile); } catch {}
 
-    const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'live';
+    const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'live';
 
     return {
       transcript: transcript.text,
@@ -730,8 +730,8 @@ app.post('/api/youtube/transcript', async (req, res) => {
     return res.status(500).json({ error: 'Supadata API key not configured' });
   }
 
-  // Validate YouTube URL
-  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/)|youtu\.be\/)[\w-]+/;
+  // Validate YouTube URL (supports watch, embed, v, live, and youtu.be formats)
+  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/|live\/)|youtu\.be\/)[\w-]+/;
   if (!youtubeRegex.test(url)) {
     return res.status(400).json({ error: 'Invalid YouTube URL' });
   }
@@ -755,7 +755,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
     }
 
     // Extract video ID and fetch title
-    const videoId = url.match(/(?:v=|youtu\.be\/)([^&\s]+)/)?.[1] || 'video';
+    const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'video';
     let title = videoId;
 
     try {
