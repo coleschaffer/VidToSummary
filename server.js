@@ -213,30 +213,37 @@ async function downloadLiveStreamAudio(url, durationSeconds = 120) {
 
   const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || Date.now();
   const timestamp = Date.now();
-  const rawFile = join(tempDir, `livestream_raw_${videoId}_${timestamp}.%(ext)s`);
+  const rawFile = join(tempDir, `livestream_raw_${videoId}_${timestamp}.mp4`);
   const outputFile = join(tempDir, `livestream_${videoId}_${timestamp}.mp3`);
 
-  // For live streams: download with flexible format, use external downloader with duration limit
-  // Using ffmpeg as external downloader allows us to limit recording duration
-  const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestaudio*/best" --external-downloader ffmpeg --external-downloader-args "ffmpeg:-t ${durationSeconds}" -o "${rawFile}" --no-playlist --no-check-certificates "${url}"`;
+  // For live streams: get the direct stream URL and use ffmpeg to record a duration
+  // First, get the stream URL using yt-dlp
+  console.log(`[API] Getting live stream URL...`);
+  const getUrlCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestaudio*/best" -g --no-playlist --no-check-certificates "${url}"`;
 
-  console.log(`[API] Downloading ${durationSeconds}s of live stream audio...`);
-  await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 min timeout for live streams
+  const { stdout: streamUrl } = await execAsync(getUrlCmd, { timeout: 60000 });
+  const directUrl = streamUrl.trim().split('\n')[0];
 
-  // Find the downloaded file (extension may vary)
-  const files = await execAsync(`ls ${tempDir}/livestream_raw_${videoId}_${timestamp}.*`);
-  const downloadedFile = files.stdout.trim().split('\n')[0];
+  if (!directUrl) {
+    throw new Error('Could not get live stream URL');
+  }
 
-  if (!downloadedFile || !existsSync(downloadedFile)) {
-    throw new Error('Live stream download completed but file not found');
+  // Use ffmpeg directly to record from the stream URL with duration limit
+  console.log(`[API] Recording ${durationSeconds}s from live stream...`);
+  const ffmpegCmd = `ffmpeg -i "${directUrl}" -t ${durationSeconds} -c copy "${rawFile}" -y`;
+
+  await execAsync(ffmpegCmd, { timeout: 180000 }); // 3 min timeout
+
+  if (!existsSync(rawFile)) {
+    throw new Error('Live stream recording completed but file not found');
   }
 
   // Convert to mp3 for AssemblyAI
   console.log('[API] Converting live stream audio to mp3...');
-  await execAsync(`ffmpeg -i "${downloadedFile}" -vn -acodec libmp3lame -q:a 2 "${outputFile}" -y`, { timeout: 60000 });
+  await execAsync(`ffmpeg -i "${rawFile}" -vn -acodec libmp3lame -q:a 2 "${outputFile}" -y`, { timeout: 60000 });
 
   // Clean up raw file
-  try { unlinkSync(downloadedFile); } catch {}
+  try { unlinkSync(rawFile); } catch {}
 
   return outputFile;
 }
