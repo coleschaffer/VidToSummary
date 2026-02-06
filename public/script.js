@@ -709,6 +709,7 @@ async function fetchMetaAdsTranscripts() {
 }
 
 function truncateTitle(title, maxLength = 50) {
+  if (!title) return 'Untitled';
   if (title.length <= maxLength) return title;
   return title.substring(0, maxLength - 3) + '...';
 }

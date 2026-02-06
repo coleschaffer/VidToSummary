@@ -1090,8 +1090,9 @@ app.post('/api/youtube/transcript', async (req, res) => {
 
   // Fast-path: if URL looks like a live stream, skip Supadata entirely
   if (looksLikeLiveUrl(url)) {
+    const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'live';
     console.log(`[API] URL looks like a live stream, skipping Supadata: ${url}`);
-    return res.json({ isLive: true, useAsyncJob: true });
+    return res.json({ isLive: true, useAsyncJob: true, videoId, title: videoId });
   }
 
   console.log(`[API] Fetching YouTube transcript for: ${url}`);
@@ -1130,8 +1131,9 @@ app.post('/api/youtube/transcript', async (req, res) => {
                         error.message.toLowerCase().includes('invalid request');
 
     if (mightBeLive) {
+      const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'live';
       console.log('[API] Supadata failed, might be a live stream - telling client to use async job');
-      return res.json({ isLive: true, useAsyncJob: true });
+      return res.json({ isLive: true, useAsyncJob: true, videoId, title: videoId });
     }
 
     res.status(500).json({ error: error.message });
