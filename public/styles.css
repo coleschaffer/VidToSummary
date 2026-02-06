@@ -1118,6 +1118,128 @@ h3 {
   border-color: var(--primary);
 }
 
+/* Settings Toggle */
+.settings-toggle {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  width: 44px;
+  height: 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  z-index: 50;
+}
+
+.settings-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--primary);
+}
+
+/* Settings Sidebar */
+.settings-sidebar {
+  position: fixed;
+  top: 0;
+  left: -320px;
+  width: 320px;
+  height: 100vh;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: left 0.3s ease;
+  z-index: 100;
+}
+
+.settings-sidebar.open {
+  left: 0;
+}
+
+/* Setting Item */
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.setting-description {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  transition: all 0.2s ease;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+  background: white;
+}
+
 /* History item styles */
 .history-item {
   background: var(--bg);
@@ -1290,9 +1412,21 @@ h3 {
     right: -100%;
   }
 
+  .settings-sidebar {
+    width: 100%;
+    left: -100%;
+  }
+
   .history-toggle {
     top: 12px;
     right: 12px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .settings-toggle {
+    top: 12px;
+    left: 12px;
     width: 40px;
     height: 40px;
   }

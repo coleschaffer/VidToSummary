@@ -21,10 +21,41 @@ const fetchYoutubeBtn = document.getElementById('fetchYoutubeBtn');
 const metaadsUrlsList = document.getElementById('metaadsUrlsList');
 const fetchMetaAdsBtn = document.getElementById('fetchMetaAdsBtn');
 const tabBtns = document.querySelectorAll('.tab-btn');
+const settingsSidebar = document.getElementById('settingsSidebar');
+const settingsToggle = document.getElementById('settingsToggle');
+const closeSettings = document.getElementById('closeSettings');
+const timestampsToggle = document.getElementById('timestampsToggle');
 
 let uploadQueue = [];
 let transcriptions = [];
 let summaries = [];
+
+// ==================== SETTINGS MANAGEMENT ====================
+const SETTINGS_KEY = 'vt_settings';
+
+function getSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || { timestamps: false };
+  } catch {
+    return { timestamps: false };
+  }
+}
+
+function updateSetting(key, value) {
+  const settings = getSettings();
+  settings[key] = value;
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+// Initialize settings UI
+timestampsToggle.checked = getSettings().timestamps;
+timestampsToggle.addEventListener('change', () => {
+  updateSetting('timestamps', timestampsToggle.checked);
+});
+
+// Settings sidebar toggle
+settingsToggle.addEventListener('click', () => settingsSidebar.classList.add('open'));
+closeSettings.addEventListener('click', () => settingsSidebar.classList.remove('open'));
 
 // ==================== HISTORY MANAGEMENT ====================
 const HISTORY_KEY = 'vt_history';
@@ -575,7 +606,7 @@ async function fetchMetaAdsTranscripts() {
       const response = await fetch('/api/metaads/transcript', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ url, timestamps: getSettings().timestamps })
       });
 
       if (!response.ok) {
@@ -668,7 +699,7 @@ async function fetchYoutubeTranscripts() {
       const response = await fetch('/api/youtube/transcript', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ url, timestamps: getSettings().timestamps })
       });
 
       if (!response.ok) {
@@ -891,6 +922,7 @@ function uploadWithProgress(item) {
     const formData = new FormData();
     const fileToUpload = item.fileToUpload || item.file;
     formData.append('video', fileToUpload, fileToUpload.name);
+    formData.append('timestamps', getSettings().timestamps ? 'true' : 'false');
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) { item.stage = 'uploading'; item.progress = Math.round((e.loaded / e.total) * 100); renderQueue(); } };
     xhr.onload = () => xhr.status === 200 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(JSON.parse(xhr.responseText)?.error || 'Upload failed'));
     xhr.onerror = () => reject(new Error('Network error'));

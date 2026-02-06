@@ -177,6 +177,38 @@ function decodeHtmlEntities(text) {
     .replace(/&nbsp;/g, ' ');
 }
 
+// Format milliseconds as H:MM:SS or M:SS timestamp
+function formatTimestamp(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+// Build timestamped transcript from AssemblyAI word-level data
+function buildTimestampedTranscript(words) {
+  if (!words || words.length === 0) return '';
+  let lines = [];
+  let currentLine = [];
+  let lineStart = words[0].start;
+  for (const word of words) {
+    if (currentLine.length === 0) lineStart = word.start;
+    currentLine.push(word.text);
+    if (word.text.match(/[.!?]$/)) {
+      lines.push(`[${formatTimestamp(lineStart)}] ${currentLine.join(' ')}`);
+      currentLine = [];
+    }
+  }
+  if (currentLine.length > 0) {
+    lines.push(`[${formatTimestamp(lineStart)}] ${currentLine.join(' ')}`);
+  }
+  return lines.join('\n');
+}
+
 // Detect if text is likely English based on common words
 function isLikelyEnglish(text) {
   const sample = text.slice(0, 2000).toLowerCase();
@@ -249,7 +281,7 @@ async function downloadLiveStreamAudio(url, durationSeconds = 120) {
 }
 
 // Transcribe a live YouTube stream using yt-dlp + AssemblyAI
-async function transcribeLiveStream(url) {
+async function transcribeLiveStream(url, timestamps = false) {
   let tempFile = null;
 
   try {
@@ -306,8 +338,10 @@ async function transcribeLiveStream(url) {
 
     const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'live';
 
+    const transcriptText = timestamps ? buildTimestampedTranscript(transcript.words) : transcript.text;
+
     return {
-      transcript: transcript.text,
+      transcript: transcriptText,
       videoId: videoId,
       title: title + ' (Live)',
       source: 'youtube'
@@ -323,8 +357,9 @@ async function transcribeLiveStream(url) {
 }
 
 // Fetch transcript from Supadata with language preference
-async function fetchSupadataTranscript(url, lang, mode = 'auto') {
-  const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}&text=true&lang=${lang}&mode=${mode}`;
+async function fetchSupadataTranscript(url, lang, mode = 'auto', timestamps = false) {
+  const textParam = timestamps ? '' : '&text=true';
+  const supadataUrl = `https://api.supadata.ai/v1/transcript?url=${encodeURIComponent(url)}${textParam}&lang=${lang}&mode=${mode}`;
   const response = await fetch(supadataUrl, {
     method: 'GET',
     headers: { 'x-api-key': SUPADATA_API_KEY }
@@ -521,8 +556,9 @@ app.post('/api/transcribe/start', rateLimitMiddleware, (req, res, next) => {
   const filename = req.file.originalname;
   const fileSize = (req.file.size / (1024 * 1024)).toFixed(1);
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const timestamps = req.body?.timestamps === 'true';
 
-  console.log(`\n[API] ========== Starting job ${jobId}: ${filename} (${fileSize}MB) [User: ${sessionId}] ==========`);
+  console.log(`\n[API] ========== Starting job ${jobId}: ${filename} (${fileSize}MB) [User: ${sessionId}] timestamps=${timestamps} ==========`);
 
   try {
     // Register job with queue manager
@@ -541,7 +577,8 @@ app.post('/api/transcribe/start', rateLimitMiddleware, (req, res, next) => {
       stage: 'uploading',
       progress: 0,
       status: 'processing',
-      startTime: Date.now()
+      startTime: Date.now(),
+      timestamps
     });
 
     // Update queue status
@@ -617,17 +654,20 @@ async function processTranscription(jobId) {
       }
     }
 
+    // Build transcript text (with or without timestamps)
+    const transcriptText = job.timestamps ? buildTimestampedTranscript(transcript.words) : transcript.text;
+
     // Save transcript to database
-    await saveTranscript(job.videoId, transcript.text);
+    await saveTranscript(job.videoId, transcriptText);
 
     // Mark complete
     job.status = 'completed';
     job.stage = 'done';
     job.progress = 100;
-    job.transcription = transcript.text;
+    job.transcription = transcriptText;
 
     // Update queue manager
-    completeJob(jobId, { transcription: transcript.text });
+    completeJob(jobId, { transcription: transcriptText });
 
     const totalTime = ((Date.now() - job.startTime) / 1000).toFixed(1);
     console.log(`[API] [${jobId}] ✓ COMPLETE! Total time: ${totalTime}s, ${transcript.text?.length || 0} chars`);
@@ -745,7 +785,7 @@ app.post('/api/summarize', async (req, res) => {
 
 // YouTube transcript via Supadata API
 app.post('/api/youtube/transcript', async (req, res) => {
-  const { url } = req.body;
+  const { url, timestamps } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'YouTube URL required' });
@@ -765,17 +805,17 @@ app.post('/api/youtube/transcript', async (req, res) => {
 
   try {
     // Fetch transcript with mode=auto (tries native captions, falls back to AI generation)
-    console.log('[API] Fetching transcript with lang=en, mode=auto');
-    let result = await fetchSupadataTranscript(url, 'en', 'auto');
-    console.log(`[API] Got transcript: ${result.content?.length || 0} chars, lang: ${result.lang}, availableLangs: ${result.availableLangs?.join(', ') || 'none'}`);
+    console.log(`[API] Fetching transcript with lang=en, mode=auto, timestamps=${!!timestamps}`);
+    let result = await fetchSupadataTranscript(url, 'en', 'auto', timestamps);
+    console.log(`[API] Got transcript: ${typeof result.content === 'string' ? result.content.length : (Array.isArray(result.content) ? result.content.length + ' segments' : 0)}, lang: ${result.lang}, availableLangs: ${result.availableLangs?.join(', ') || 'none'}`);
 
     // If we didn't get English but English is available, fetch it specifically
     if (result.lang && !result.lang.startsWith('en') && result.availableLangs?.length > 0) {
       const englishLang = result.availableLangs.find(l => l.startsWith('en'));
       if (englishLang) {
         console.log(`[API] English available as '${englishLang}', fetching specifically`);
-        result = await fetchSupadataTranscript(url, englishLang, 'auto');
-        console.log(`[API] Got English transcript: ${result.content?.length || 0} chars`);
+        result = await fetchSupadataTranscript(url, englishLang, 'auto', timestamps);
+        console.log(`[API] Got English transcript: ${typeof result.content === 'string' ? result.content.length : (Array.isArray(result.content) ? result.content.length + ' segments' : 0)}`);
       }
     }
 
@@ -794,10 +834,22 @@ app.post('/api/youtube/transcript', async (req, res) => {
       console.log(`[API] Could not fetch video title: ${e.message}`);
     }
 
+    // Build transcript text, handling timestamped (array) vs plain (string) formats
+    let transcript;
+    if (timestamps && Array.isArray(result.content)) {
+      transcript = result.content.map(seg => `[${formatTimestamp(seg.offset)}] ${seg.text}`).join('\n');
+    } else if (Array.isArray(result.content)) {
+      transcript = result.content.map(seg => seg.text).join(' ');
+    } else {
+      transcript = result.content;
+    }
+
     // Determine if translation is needed
-    let transcript = result.content;
+    const plainText = timestamps && Array.isArray(result.content)
+      ? result.content.map(seg => seg.text).join(' ')
+      : transcript;
     const labeledAsEnglish = result.lang?.startsWith('en');
-    const contentIsEnglish = isLikelyEnglish(transcript);
+    const contentIsEnglish = isLikelyEnglish(plainText);
 
     if (!labeledAsEnglish && !contentIsEnglish) {
       // Not English by label or content - translate
@@ -831,7 +883,7 @@ app.post('/api/youtube/transcript', async (req, res) => {
 
         if (isLive) {
           console.log('[API] Video is live! Using yt-dlp + AssemblyAI fallback...');
-          const result = await transcribeLiveStream(url);
+          const result = await transcribeLiveStream(url, timestamps);
           return res.json({
             transcript: result.transcript,
             lang: 'en',
@@ -884,7 +936,7 @@ async function getMetaAdTitle(adId) {
 
 // Meta Ads transcript endpoint
 app.post('/api/metaads/transcript', async (req, res) => {
-  const { url } = req.body;
+  const { url, timestamps } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'Meta Ad Library URL required' });
@@ -951,8 +1003,9 @@ app.post('/api/metaads/transcript', async (req, res) => {
     try { unlinkSync(tempFile); } catch {}
 
     // 6. Return result (same format as YouTube)
+    const transcriptText = timestamps ? buildTimestampedTranscript(transcript.words) : transcript.text;
     res.json({
-      transcript: transcript.text,
+      transcript: transcriptText,
       adId: adId,
       title: title,
       source: 'metaads'
