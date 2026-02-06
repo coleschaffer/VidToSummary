@@ -281,7 +281,8 @@ async function downloadLiveStreamAudio(url, durationSeconds = 120) {
   console.log(`[API] Recording ${durationSeconds}s from live stream...`);
   const ffmpegCmd = `ffmpeg -i "${directUrl}" -t ${durationSeconds} -c copy "${rawFile}" -y`;
 
-  await execAsync(ffmpegCmd, { timeout: 180000 }); // 3 min timeout
+  const ffmpegTimeout = (durationSeconds * 1.5 + 60) * 1000;
+  await execAsync(ffmpegCmd, { timeout: ffmpegTimeout });
 
   if (!existsSync(rawFile)) {
     throw new Error('Live stream recording completed but file not found');
@@ -916,7 +917,6 @@ async function processLiveTranscription(jobId) {
 
     // Stage 2: Record audio from live stream
     job.stage = 'recording';
-    job.recordingDuration = 120;
     job.recordingElapsed = 0;
     job.stageLabel = 'Recording audio...';
     job.progress = 0;
@@ -929,7 +929,7 @@ async function processLiveTranscription(jobId) {
       job.stageLabel = `Recording audio (${job.recordingElapsed}/${job.recordingDuration}s)...`;
     }, 1000);
 
-    tempFile = await downloadLiveStreamAudio(normalizedUrl, 120);
+    tempFile = await downloadLiveStreamAudio(normalizedUrl, job.recordingDuration);
 
     clearInterval(recordingTimer);
     recordingTimer = null;
@@ -1022,7 +1022,8 @@ async function processLiveTranscription(jobId) {
 
 // Start a live stream transcription job (returns immediately)
 app.post('/api/youtube/live-transcript-start', async (req, res) => {
-  const { url, timestamps } = req.body;
+  const { url, timestamps, duration } = req.body;
+  const recordingDuration = Math.min(600, Math.max(30, parseInt(duration) || 120));
 
   if (!url) {
     return res.status(400).json({ error: 'YouTube URL required' });
@@ -1045,7 +1046,7 @@ app.post('/api/youtube/live-transcript-start', async (req, res) => {
     stageLabel: 'Detecting live stream...',
     progress: 0,
     isLive: null,
-    recordingDuration: 120,
+    recordingDuration,
     recordingElapsed: 0,
     createdAt: Date.now(),
     result: null,
@@ -1296,6 +1297,7 @@ setInterval(() => {
 // Start video download job - returns immediately with job ID
 app.post('/api/youtube/download-start/:videoId', async (req, res) => {
   const { videoId } = req.params;
+  const { isLive, duration } = req.body || {};
 
   if (!videoId || videoId.length !== 11) {
     return res.status(400).json({ error: 'Invalid video ID' });
@@ -1325,19 +1327,38 @@ app.post('/api/youtube/download-start/:videoId', async (req, res) => {
   (async () => {
     const job = videoDownloadJobs.get(jobId);
     try {
-      console.log(`[API] [${jobId}] Starting download for: ${videoId}`);
+      console.log(`[API] [${jobId}] Starting download for: ${videoId}${isLive ? ' (live stream)' : ''}`);
 
       const proxyUrl = getProxyUrl();
+      const normalizedUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`[API] [${jobId}] Using proxy: ${DECODO_PROXY_HOST}:${proxyUrl.match(/:(\d+)$/)?.[1] || 'unknown'}`);
 
-      // Use Android client to bypass restrictions, add user agent
-      const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.youtube.com/watch?v=${videoId}"`;
-
       const startTime = Date.now();
-      await execAsync(ytdlpCmd, { timeout: 300000 });
+
+      if (isLive) {
+        // Live stream: get direct URL then record a clip with ffmpeg
+        const liveDuration = Math.min(600, Math.max(30, parseInt(duration) || 120));
+        console.log(`[API] [${jobId}] Recording ${liveDuration}s from live stream...`);
+
+        const getUrlCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "best" -g --no-playlist --no-check-certificates "${normalizedUrl}"`;
+        const { stdout: streamUrl } = await execAsync(getUrlCmd, { timeout: 60000 });
+        const directUrl = streamUrl.trim().split('\n')[0];
+
+        if (!directUrl) {
+          throw new Error('Could not get live stream URL');
+        }
+
+        const ffmpegCmd = `ffmpeg -i "${directUrl}" -t ${liveDuration} -c copy "${tempFile}" -y`;
+        const ffmpegTimeout = (liveDuration * 1.5 + 60) * 1000;
+        await execAsync(ffmpegCmd, { timeout: ffmpegTimeout });
+      } else {
+        // Regular video: use yt-dlp to download
+        const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "${normalizedUrl}"`;
+        await execAsync(ytdlpCmd, { timeout: 300000 });
+      }
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`[API] [${jobId}] yt-dlp completed in ${elapsed}s`);
+      console.log(`[API] [${jobId}] Download completed in ${elapsed}s`);
 
       if (!existsSync(tempFile)) {
         throw new Error('Download completed but file not found');
@@ -1345,7 +1366,7 @@ app.post('/api/youtube/download-start/:videoId', async (req, res) => {
 
       // Get video title for filename
       try {
-        const titleCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" --no-check-certificates --get-title "https://www.youtube.com/watch?v=${videoId}"`;
+        const titleCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" --no-check-certificates --get-title "${normalizedUrl}"`;
         const { stdout } = await execAsync(titleCmd, { timeout: 30000 });
         const title = stdout.trim()
           .replace(/[\x00-\x1f\x7f-\x9f]/g, '')

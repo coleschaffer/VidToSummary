@@ -35,9 +35,9 @@ const SETTINGS_KEY = 'vt_settings';
 
 function getSettings() {
   try {
-    return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || { timestamps: false };
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || { timestamps: false, livestreamDuration: 120 };
   } catch {
-    return { timestamps: false };
+    return { timestamps: false, livestreamDuration: 120 };
   }
 }
 
@@ -51,6 +51,14 @@ function updateSetting(key, value) {
 timestampsToggle.checked = getSettings().timestamps;
 timestampsToggle.addEventListener('change', () => {
   updateSetting('timestamps', timestampsToggle.checked);
+});
+
+const livestreamDurationInput = document.getElementById('livestreamDurationInput');
+livestreamDurationInput.value = getSettings().livestreamDuration || 120;
+livestreamDurationInput.addEventListener('change', () => {
+  const value = Math.min(600, Math.max(30, parseInt(livestreamDurationInput.value) || 120));
+  livestreamDurationInput.value = value;
+  updateSetting('livestreamDuration', value);
 });
 
 // Settings sidebar toggle
@@ -786,7 +794,7 @@ async function fetchYoutubeTranscripts() {
         const startResponse = await fetch('/api/youtube/live-transcript-start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, timestamps: getSettings().timestamps })
+          body: JSON.stringify({ url, timestamps: getSettings().timestamps, duration: getSettings().livestreamDuration })
         });
 
         if (!startResponse.ok) {
@@ -1174,6 +1182,7 @@ window.downloadVideo = async function(index, event) {
   event.stopPropagation();
   const item = transcriptions[index];
   if (!item || !item.videoId || item.source !== 'youtube') return;
+  const isLive = item.isLive || false;
 
   const btn = event.currentTarget;
   const originalHTML = btn.innerHTML;
@@ -1184,7 +1193,11 @@ window.downloadVideo = async function(index, event) {
 
   try {
     // Start the download job
-    const startResponse = await fetch(`/api/youtube/download-start/${item.videoId}`, { method: 'POST' });
+    const startResponse = await fetch(`/api/youtube/download-start/${item.videoId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isLive, duration: isLive ? getSettings().livestreamDuration : undefined })
+    });
     if (!startResponse.ok) {
       const error = await startResponse.json().catch(() => ({ error: 'Failed to start download' }));
       throw new Error(error.error);
@@ -1397,7 +1410,12 @@ window.downloadAllVideos = async function(event) {
 
     try {
       // Start download job
-      const startResponse = await fetch(`${apiBase}/download-start/${video.videoId}`, { method: 'POST' });
+      const videoIsLive = video.isLive && video.source === 'youtube';
+      const startResponse = await fetch(`${apiBase}/download-start/${video.videoId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isLive: videoIsLive, duration: videoIsLive ? getSettings().livestreamDuration : undefined })
+      });
       if (!startResponse.ok) throw new Error('Failed to start');
       const { jobId } = await startResponse.json();
 
@@ -1562,6 +1580,7 @@ setTimeout(() => loadFFmpeg().then(loaded => { if (loaded) console.log('[FFmpeg]
 let clipModalVideoId = null;
 let clipModalVideoTitle = '';
 let clipModalSource = null; // 'youtube' or 'metaads'
+let clipModalIsLive = false;
 
 // Create modal HTML and append to body
 const clipModalHTML = `
@@ -1616,6 +1635,7 @@ window.openClipModal = function(index, event) {
   clipModalVideoId = item.videoId;
   clipModalVideoTitle = item.filename;
   clipModalSource = item.source || 'youtube';
+  clipModalIsLive = item.isLive || false;
   document.getElementById('clipModalTitle').textContent = item.filename;
 
   // Reset to single clip range
@@ -1646,6 +1666,7 @@ window.closeClipModal = function() {
   document.getElementById('clipModal').style.display = 'none';
   clipModalVideoId = null;
   clipModalSource = null;
+  clipModalIsLive = false;
 };
 
 window.addClipRange = function() {
@@ -1743,7 +1764,11 @@ window.downloadClips = async function() {
     const apiBase = clipModalSource === 'metaads' ? '/api/metaads' : '/api/youtube';
 
     // Start download job
-    const startResponse = await fetch(`${apiBase}/download-start/${clipModalVideoId}`, { method: 'POST' });
+    const startResponse = await fetch(`${apiBase}/download-start/${clipModalVideoId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isLive: clipModalIsLive, duration: clipModalIsLive ? getSettings().livestreamDuration : undefined })
+    });
     if (!startResponse.ok) {
       throw new Error('Failed to start download');
     }

@@ -1218,6 +1218,26 @@ h3 {
   background: white;
 }
 
+/* Number input in settings */
+.setting-input {
+  width: 80px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.875rem;
+  font-family: inherit;
+  text-align: center;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.setting-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
 /* History item styles */
 .history-item {
   background: var(--bg);
