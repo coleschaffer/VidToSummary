@@ -221,12 +221,23 @@ function isLikelyEnglish(text) {
   return matches.length >= 10;
 }
 
+// Normalize any YouTube URL to https://www.youtube.com/watch?v=VIDEO_ID
+// yt-dlp and Supadata can fail on /live/ URLs, so always convert first
+function normalizeYouTubeUrl(url) {
+  const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s?]+)/)?.[1];
+  if (videoId) {
+    return `https://www.youtube.com/watch?v=${videoId}`;
+  }
+  return url;
+}
+
 // Check if a YouTube video is a live stream using yt-dlp
 async function isYouTubeLive(url) {
   try {
+    const normalizedUrl = normalizeYouTubeUrl(url);
     const proxyUrl = getProxyUrl();
     const { stdout } = await execAsync(
-      `yt-dlp --proxy "${proxyUrl}" --dump-json --no-download "${url}"`,
+      `yt-dlp --proxy "${proxyUrl}" --dump-json --no-download "${normalizedUrl}"`,
       { timeout: 30000 }
     );
     const info = JSON.parse(stdout);
@@ -255,8 +266,9 @@ async function downloadLiveStreamAudio(url, durationSeconds = 120) {
 
   // For live streams: get the direct stream URL and use ffmpeg to record a duration
   // First, get the stream URL using yt-dlp
+  const normalizedUrl = normalizeYouTubeUrl(url);
   console.log(`[API] Getting live stream URL...`);
-  const getUrlCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestaudio*/best" -g --no-playlist --no-check-certificates "${url}"`;
+  const getUrlCmd = `yt-dlp --proxy "${proxyUrl}" --extractor-args "youtube:player_client=android" -f "bestaudio*/best" -g --no-playlist --no-check-certificates "${normalizedUrl}"`;
 
   const { stdout: streamUrl } = await execAsync(getUrlCmd, { timeout: 60000 });
   const directUrl = streamUrl.trim().split('\n')[0];
@@ -851,15 +863,16 @@ async function processLiveTranscription(jobId) {
 
   let tempFile = null;
   let recordingTimer = null;
+  const normalizedUrl = normalizeYouTubeUrl(job.url);
 
   try {
     // Stage 1: Detect live stream
     job.stage = 'detecting';
     job.stageLabel = 'Detecting live stream...';
     job.progress = 0;
-    console.log(`[API] [${jobId}] Detecting if video is live...`);
+    console.log(`[API] [${jobId}] Detecting if video is live (normalized: ${normalizedUrl})...`);
 
-    const isLive = await isYouTubeLive(job.url);
+    const isLive = await isYouTubeLive(normalizedUrl);
     job.isLive = isLive;
 
     if (!isLive) {
@@ -868,12 +881,12 @@ async function processLiveTranscription(jobId) {
       job.stage = 'transcribing';
       job.stageLabel = 'Fetching transcript...';
 
-      const transcript = await fetchTranscriptViaPipeline(job.url, job.timestamps);
+      const transcript = await fetchTranscriptViaPipeline(normalizedUrl, job.timestamps);
 
       // Get video title
       let title = job.videoId;
       try {
-        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(job.url)}&format=json`;
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`;
         const oembedResponse = await fetch(oembedUrl);
         if (oembedResponse.ok) {
           const oembedData = await oembedResponse.json();
@@ -910,7 +923,7 @@ async function processLiveTranscription(jobId) {
       job.stageLabel = `Recording audio (${job.recordingElapsed}/${job.recordingDuration}s)...`;
     }, 1000);
 
-    tempFile = await downloadLiveStreamAudio(job.url, 120);
+    tempFile = await downloadLiveStreamAudio(normalizedUrl, 120);
 
     clearInterval(recordingTimer);
     recordingTimer = null;
@@ -924,7 +937,7 @@ async function processLiveTranscription(jobId) {
     // Get video title
     let title = 'Live Stream';
     try {
-      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(job.url)}&format=json`;
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`;
       const oembedResponse = await fetch(oembedUrl);
       if (oembedResponse.ok) {
         const oembedData = await oembedResponse.json();
@@ -1095,17 +1108,18 @@ app.post('/api/youtube/transcript', async (req, res) => {
     return res.json({ isLive: true, useAsyncJob: true, videoId, title: videoId });
   }
 
-  console.log(`[API] Fetching YouTube transcript for: ${url}`);
+  const normalizedUrl = normalizeYouTubeUrl(url);
+  console.log(`[API] Fetching YouTube transcript for: ${normalizedUrl}`);
 
   try {
-    const transcript = await fetchTranscriptViaPipeline(url, timestamps);
+    const transcript = await fetchTranscriptViaPipeline(normalizedUrl, timestamps);
 
     // Extract video ID and fetch title
-    const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'video';
+    const videoId = normalizedUrl.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'video';
     let title = videoId;
 
     try {
-      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`;
       const oembedResponse = await fetch(oembedUrl);
       if (oembedResponse.ok) {
         const oembedData = await oembedResponse.json();
