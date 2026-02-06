@@ -237,6 +237,11 @@ async function isYouTubeLive(url) {
   }
 }
 
+// Fast check if URL looks like a live stream (e.g. youtube.com/live/...)
+function looksLikeLiveUrl(url) {
+  return /youtube\.com\/live\//.test(url);
+}
+
 // Download audio from a live YouTube stream (limited duration)
 async function downloadLiveStreamAudio(url, durationSeconds = 120) {
   const proxyUrl = getProxyUrl();
@@ -538,6 +543,19 @@ app.get('/api/queue/status', (req, res) => {
 // Track active transcriptions for progress polling
 const activeTranscriptions = new Map();
 
+// Track live stream transcription jobs
+const liveTranscriptionJobs = new Map();
+
+// Clean up old live transcription jobs every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of liveTranscriptionJobs) {
+    if (now - job.createdAt > 30 * 60 * 1000) {
+      liveTranscriptionJobs.delete(jobId);
+    }
+  }
+}, 10 * 60 * 1000);
+
 // Start transcription - returns job ID for progress polling
 app.post('/api/transcribe/start', rateLimitMiddleware, (req, res, next) => {
   const contentLength = req.headers['content-length'];
@@ -783,6 +801,275 @@ app.post('/api/summarize', async (req, res) => {
   }
 });
 
+// Reusable Supadata pipeline: fetch transcript, try English fallback, translate if needed
+async function fetchTranscriptViaPipeline(url, timestamps) {
+  // Fetch transcript with mode=auto
+  console.log(`[API] Pipeline: fetching transcript with lang=en, mode=auto, timestamps=${!!timestamps}`);
+  let result = await fetchSupadataTranscript(url, 'en', 'auto', timestamps);
+  console.log(`[API] Pipeline: got transcript, lang: ${result.lang}, availableLangs: ${result.availableLangs?.join(', ') || 'none'}`);
+
+  // If we didn't get English but English is available, fetch it specifically
+  if (result.lang && !result.lang.startsWith('en') && result.availableLangs?.length > 0) {
+    const englishLang = result.availableLangs.find(l => l.startsWith('en'));
+    if (englishLang) {
+      console.log(`[API] Pipeline: English available as '${englishLang}', fetching specifically`);
+      result = await fetchSupadataTranscript(url, englishLang, 'auto', timestamps);
+    }
+  }
+
+  // Build transcript text
+  let transcript;
+  if (timestamps && Array.isArray(result.content)) {
+    transcript = result.content.map(seg => `[${formatTimestamp(seg.offset)}] ${seg.text}`).join('\n');
+  } else if (Array.isArray(result.content)) {
+    transcript = result.content.map(seg => seg.text).join(' ');
+  } else {
+    transcript = result.content;
+  }
+
+  // Determine if translation is needed
+  const plainText = timestamps && Array.isArray(result.content)
+    ? result.content.map(seg => seg.text).join(' ')
+    : transcript;
+  const labeledAsEnglish = result.lang?.startsWith('en');
+  const contentIsEnglish = isLikelyEnglish(plainText);
+
+  if (!labeledAsEnglish && !contentIsEnglish) {
+    console.log(`[API] Pipeline: translating from ${result.lang} to English`);
+    transcript = await translateToEnglish(transcript, result.lang);
+  } else if (!labeledAsEnglish && contentIsEnglish) {
+    console.log(`[API] Pipeline: labeled as '${result.lang}' but content is English - skipping translation`);
+  }
+
+  return decodeHtmlEntities(transcript);
+}
+
+// Process a live stream transcription job in the background
+async function processLiveTranscription(jobId) {
+  const job = liveTranscriptionJobs.get(jobId);
+  if (!job) return;
+
+  let tempFile = null;
+  let recordingTimer = null;
+
+  try {
+    // Stage 1: Detect live stream
+    job.stage = 'detecting';
+    job.stageLabel = 'Detecting live stream...';
+    job.progress = 0;
+    console.log(`[API] [${jobId}] Detecting if video is live...`);
+
+    const isLive = await isYouTubeLive(job.url);
+    job.isLive = isLive;
+
+    if (!isLive) {
+      // Not actually live - fall back to Supadata pipeline
+      console.log(`[API] [${jobId}] Not a live stream, falling back to Supadata`);
+      job.stage = 'transcribing';
+      job.stageLabel = 'Fetching transcript...';
+
+      const transcript = await fetchTranscriptViaPipeline(job.url, job.timestamps);
+
+      // Get video title
+      let title = job.videoId;
+      try {
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(job.url)}&format=json`;
+        const oembedResponse = await fetch(oembedUrl);
+        if (oembedResponse.ok) {
+          const oembedData = await oembedResponse.json();
+          title = oembedData.title || title;
+        }
+      } catch (e) {}
+
+      job.status = 'completed';
+      job.stage = 'done';
+      job.stageLabel = 'Done';
+      job.progress = 100;
+      job.result = {
+        transcript,
+        videoId: job.videoId,
+        title,
+        source: 'youtube',
+        isLive: false
+      };
+      return;
+    }
+
+    // Stage 2: Record audio from live stream
+    job.stage = 'recording';
+    job.recordingDuration = 120;
+    job.recordingElapsed = 0;
+    job.stageLabel = 'Recording audio...';
+    job.progress = 0;
+    console.log(`[API] [${jobId}] Recording live stream audio...`);
+
+    // Start a timer to update recording progress every second
+    recordingTimer = setInterval(() => {
+      job.recordingElapsed = Math.min(job.recordingElapsed + 1, job.recordingDuration);
+      job.progress = Math.round((job.recordingElapsed / job.recordingDuration) * 100);
+      job.stageLabel = `Recording audio (${job.recordingElapsed}/${job.recordingDuration}s)...`;
+    }, 1000);
+
+    tempFile = await downloadLiveStreamAudio(job.url, 120);
+
+    clearInterval(recordingTimer);
+    recordingTimer = null;
+    job.recordingElapsed = job.recordingDuration;
+    job.progress = 100;
+
+    if (!existsSync(tempFile)) {
+      throw new Error('Live stream recording completed but file not found');
+    }
+
+    // Get video title
+    let title = 'Live Stream';
+    try {
+      const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(job.url)}&format=json`;
+      const oembedResponse = await fetch(oembedUrl);
+      if (oembedResponse.ok) {
+        const oembedData = await oembedResponse.json();
+        title = oembedData.title || title;
+      }
+    } catch (e) {}
+
+    // Stage 3: Upload to AssemblyAI
+    job.stage = 'uploading';
+    job.stageLabel = 'Uploading audio...';
+    job.progress = 0;
+    console.log(`[API] [${jobId}] Uploading to AssemblyAI...`);
+
+    const uploadUrl = await assemblyai.files.upload(tempFile);
+
+    // Clean up temp file after upload
+    try { unlinkSync(tempFile); tempFile = null; } catch {}
+
+    // Stage 4: Transcribe
+    job.stage = 'transcribing';
+    job.stageLabel = 'Transcribing audio...';
+    job.progress = 0;
+    console.log(`[API] [${jobId}] Submitting transcription...`);
+
+    const transcriptRequest = await assemblyai.transcripts.submit({ audio_url: uploadUrl });
+
+    let transcript;
+    let pollCount = 0;
+    while (true) {
+      transcript = await assemblyai.transcripts.get(transcriptRequest.id);
+      pollCount++;
+
+      if (transcript.status === 'completed') {
+        console.log(`[API] [${jobId}] Transcription complete after ${pollCount} polls`);
+        break;
+      }
+      if (transcript.status === 'error') {
+        throw new Error(transcript.error || 'Transcription failed');
+      }
+
+      job.progress = Math.min(pollCount * 10, 95);
+      console.log(`[API] [${jobId}] Transcription status: ${transcript.status} (poll ${pollCount})`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    const transcriptText = job.timestamps
+      ? buildTimestampedTranscript(transcript.words)
+      : transcript.text;
+
+    // Stage 5: Done
+    job.status = 'completed';
+    job.stage = 'done';
+    job.stageLabel = 'Done';
+    job.progress = 100;
+    job.result = {
+      transcript: transcriptText,
+      videoId: job.videoId,
+      title: title + ' (Live)',
+      source: 'youtube',
+      isLive: true
+    };
+
+    const totalTime = ((Date.now() - job.createdAt) / 1000).toFixed(1);
+    console.log(`[API] [${jobId}] Live transcription complete in ${totalTime}s`);
+
+  } catch (error) {
+    if (recordingTimer) clearInterval(recordingTimer);
+    console.error(`[API] [${jobId}] Live transcription failed:`, error.message);
+    job.status = 'error';
+    job.error = error.message;
+    if (tempFile) {
+      try { unlinkSync(tempFile); } catch {}
+    }
+  }
+}
+
+// Start a live stream transcription job (returns immediately)
+app.post('/api/youtube/live-transcript-start', async (req, res) => {
+  const { url, timestamps } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'YouTube URL required' });
+  }
+
+  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|v\/|live\/)|youtu\.be\/)[\w-]+/;
+  if (!youtubeRegex.test(url)) {
+    return res.status(400).json({ error: 'Invalid YouTube URL' });
+  }
+
+  const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'live';
+  const jobId = `live_${videoId}_${Date.now()}`;
+
+  liveTranscriptionJobs.set(jobId, {
+    url,
+    videoId,
+    timestamps: !!timestamps,
+    status: 'processing',
+    stage: 'detecting',
+    stageLabel: 'Detecting live stream...',
+    progress: 0,
+    isLive: null,
+    recordingDuration: 120,
+    recordingElapsed: 0,
+    createdAt: Date.now(),
+    result: null,
+    error: null
+  });
+
+  console.log(`[API] [${jobId}] Live transcription job started for: ${url}`);
+  res.json({ jobId });
+
+  // Kick off background processing
+  processLiveTranscription(jobId);
+});
+
+// Poll live stream transcription job status
+app.get('/api/youtube/live-transcript-status/:jobId', (req, res) => {
+  const job = liveTranscriptionJobs.get(req.params.jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  const response = {
+    status: job.status,
+    stage: job.stage,
+    stageLabel: job.stageLabel,
+    progress: job.progress,
+    isLive: job.isLive,
+    recordingDuration: job.recordingDuration,
+    recordingElapsed: job.recordingElapsed
+  };
+
+  if (job.status === 'completed') {
+    response.result = job.result;
+    // Clean up after 60 seconds
+    setTimeout(() => liveTranscriptionJobs.delete(req.params.jobId), 60000);
+  } else if (job.status === 'error') {
+    response.error = job.error;
+    setTimeout(() => liveTranscriptionJobs.delete(req.params.jobId), 60000);
+  }
+
+  res.json(response);
+});
+
 // YouTube transcript via Supadata API
 app.post('/api/youtube/transcript', async (req, res) => {
   const { url, timestamps } = req.body;
@@ -801,23 +1088,16 @@ app.post('/api/youtube/transcript', async (req, res) => {
     return res.status(400).json({ error: 'Invalid YouTube URL' });
   }
 
+  // Fast-path: if URL looks like a live stream, skip Supadata entirely
+  if (looksLikeLiveUrl(url)) {
+    console.log(`[API] URL looks like a live stream, skipping Supadata: ${url}`);
+    return res.json({ isLive: true, useAsyncJob: true });
+  }
+
   console.log(`[API] Fetching YouTube transcript for: ${url}`);
 
   try {
-    // Fetch transcript with mode=auto (tries native captions, falls back to AI generation)
-    console.log(`[API] Fetching transcript with lang=en, mode=auto, timestamps=${!!timestamps}`);
-    let result = await fetchSupadataTranscript(url, 'en', 'auto', timestamps);
-    console.log(`[API] Got transcript: ${typeof result.content === 'string' ? result.content.length : (Array.isArray(result.content) ? result.content.length + ' segments' : 0)}, lang: ${result.lang}, availableLangs: ${result.availableLangs?.join(', ') || 'none'}`);
-
-    // If we didn't get English but English is available, fetch it specifically
-    if (result.lang && !result.lang.startsWith('en') && result.availableLangs?.length > 0) {
-      const englishLang = result.availableLangs.find(l => l.startsWith('en'));
-      if (englishLang) {
-        console.log(`[API] English available as '${englishLang}', fetching specifically`);
-        result = await fetchSupadataTranscript(url, englishLang, 'auto', timestamps);
-        console.log(`[API] Got English transcript: ${typeof result.content === 'string' ? result.content.length : (Array.isArray(result.content) ? result.content.length + ' segments' : 0)}`);
-      }
-    }
+    const transcript = await fetchTranscriptViaPipeline(url, timestamps);
 
     // Extract video ID and fetch title
     const videoId = url.match(/(?:v=|youtu\.be\/|live\/)([^&\s]+)/)?.[1] || 'video';
@@ -834,34 +1114,8 @@ app.post('/api/youtube/transcript', async (req, res) => {
       console.log(`[API] Could not fetch video title: ${e.message}`);
     }
 
-    // Build transcript text, handling timestamped (array) vs plain (string) formats
-    let transcript;
-    if (timestamps && Array.isArray(result.content)) {
-      transcript = result.content.map(seg => `[${formatTimestamp(seg.offset)}] ${seg.text}`).join('\n');
-    } else if (Array.isArray(result.content)) {
-      transcript = result.content.map(seg => seg.text).join(' ');
-    } else {
-      transcript = result.content;
-    }
-
-    // Determine if translation is needed
-    const plainText = timestamps && Array.isArray(result.content)
-      ? result.content.map(seg => seg.text).join(' ')
-      : transcript;
-    const labeledAsEnglish = result.lang?.startsWith('en');
-    const contentIsEnglish = isLikelyEnglish(plainText);
-
-    if (!labeledAsEnglish && !contentIsEnglish) {
-      // Not English by label or content - translate
-      console.log(`[API] Translating transcript from ${result.lang} to English`);
-      transcript = await translateToEnglish(transcript, result.lang);
-    } else if (!labeledAsEnglish && contentIsEnglish) {
-      // Mislabeled - content is already English, skip translation
-      console.log(`[API] Transcript labeled as '${result.lang}' but content is English - skipping translation`);
-    }
-
     res.json({
-      transcript: decodeHtmlEntities(transcript),
+      transcript,
       lang: 'en',
       videoId: videoId,
       title: title,
@@ -876,29 +1130,8 @@ app.post('/api/youtube/transcript', async (req, res) => {
                         error.message.toLowerCase().includes('invalid request');
 
     if (mightBeLive) {
-      console.log('[API] Supadata failed, checking if video is live...');
-
-      try {
-        const isLive = await isYouTubeLive(url);
-
-        if (isLive) {
-          console.log('[API] Video is live! Using yt-dlp + AssemblyAI fallback...');
-          const result = await transcribeLiveStream(url, timestamps);
-          return res.json({
-            transcript: result.transcript,
-            lang: 'en',
-            videoId: result.videoId,
-            title: result.title,
-            source: 'youtube',
-            isLive: true
-          });
-        }
-      } catch (liveError) {
-        console.error('[API] Live stream transcription failed:', liveError);
-        return res.status(500).json({
-          error: `Live stream transcription failed: ${liveError.message}. Try again or wait for the stream to end.`
-        });
-      }
+      console.log('[API] Supadata failed, might be a live stream - telling client to use async job');
+      return res.json({ isLive: true, useAsyncJob: true });
     }
 
     res.status(500).json({ error: error.message });

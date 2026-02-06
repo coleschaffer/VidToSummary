@@ -378,7 +378,9 @@ window.loadHistorySession = function(idx) {
   transcriptions = session.videos.map(v => ({
     filename: v.filename,
     transcription: v.transcription,
-    videoId: v.videoId
+    videoId: v.videoId,
+    source: v.source,
+    isLive: v.isLive
   }));
   summaries = session.summaries || [];
 
@@ -443,7 +445,8 @@ tabBtns.forEach(btn => {
           filename: t.filename,
           transcription: t.transcription,
           videoId: t.videoId,
-          source: t.source || 'file'
+          source: t.source || 'file',
+          isLive: t.isLive || false
         })),
         summaries: summaries.map(s => ({
           filename: s.filename,
@@ -710,6 +713,33 @@ function truncateTitle(title, maxLength = 50) {
   return title.substring(0, maxLength - 3) + '...';
 }
 
+// Poll a live stream transcription job for progress
+async function pollLiveTranscription(jobId, updateButtonText) {
+  let polls = 0;
+  while (polls < 300) { // max ~10 minutes
+    const response = await fetch(`/api/youtube/live-transcript-status/${jobId}`);
+    if (!response.ok) throw new Error('Failed to check live transcription status');
+
+    const data = await response.json();
+
+    // Update button text with stage-specific messages
+    if (updateButtonText) {
+      updateButtonText(data.stageLabel || 'Processing...');
+    }
+
+    if (data.status === 'completed') {
+      return data.result;
+    }
+    if (data.status === 'error') {
+      throw new Error(data.error || 'Live transcription failed');
+    }
+
+    await new Promise(r => setTimeout(r, 2000));
+    polls++;
+  }
+  throw new Error('Live transcription timed out');
+}
+
 async function fetchYoutubeTranscripts() {
   const inputs = youtubeUrlsList.querySelectorAll('.youtube-url-input');
   const urls = Array.from(inputs)
@@ -746,6 +776,45 @@ async function fetchYoutubeTranscripts() {
       }
 
       const data = await response.json();
+
+      // Check if this is a live stream that needs async processing
+      if (data.useAsyncJob) {
+        // Start async live transcription job
+        fetchYoutubeBtn.innerHTML = `<span class="spinner"></span> Detecting live stream...`;
+
+        const startResponse = await fetch('/api/youtube/live-transcript-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, timestamps: getSettings().timestamps })
+        });
+
+        if (!startResponse.ok) {
+          const error = await startResponse.json();
+          throw new Error(error.error || 'Failed to start live transcription');
+        }
+
+        const { jobId } = await startResponse.json();
+
+        // Poll for progress, updating button text
+        const result = await pollLiveTranscription(jobId, (stageLabel) => {
+          fetchYoutubeBtn.innerHTML = `<span class="spinner"></span> ${stageLabel}`;
+        });
+
+        const displayTitle = truncateTitle(result.title || result.videoId);
+
+        transcriptions.push({
+          filename: displayTitle,
+          transcription: result.transcript,
+          videoId: result.videoId,
+          source: 'youtube',
+          url: url,
+          isLive: result.isLive
+        });
+
+        successCount++;
+        renderResults();
+        continue;
+      }
 
       // Use video title, truncated if needed
       const displayTitle = truncateTitle(data.title || data.videoId);
@@ -1020,7 +1089,7 @@ transcribeAllBtn.addEventListener('click', async () => {
     saveToHistory({
       id: Date.now(),
       date: new Date().toISOString(),
-      videos: transcriptions.map(t => ({ filename: t.filename, transcription: t.transcription, videoId: t.videoId, source: t.source || 'file' })),
+      videos: transcriptions.map(t => ({ filename: t.filename, transcription: t.transcription, videoId: t.videoId, source: t.source || 'file', isLive: t.isLive || false })),
       summaries: []
     });
   }
@@ -1042,7 +1111,7 @@ function renderResults() {
     ${transcriptions.map((item, i) => `
     <div class="result-item ${i === 0 ? 'expanded' : ''}" data-index="${i}">
       <div class="result-header" onclick="toggleResult(${i})">
-        <span class="result-title">${item.filename}</span>
+        <span class="result-title">${item.filename}</span>${item.isLive ? '<span class="live-badge">LIVE</span>' : ''}
         ${item.url ? `<a href="${item.url}" target="_blank" rel="noopener" class="result-url-btn" onclick="event.stopPropagation()" title="Open original"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : ''}
         <svg class="result-toggle" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       </div>
