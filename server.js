@@ -881,7 +881,13 @@ async function processLiveTranscription(jobId) {
       job.stage = 'transcribing';
       job.stageLabel = 'Fetching transcript...';
 
-      const transcript = await fetchTranscriptViaPipeline(normalizedUrl, job.timestamps);
+      let transcript;
+      try {
+        transcript = await fetchTranscriptViaPipeline(normalizedUrl, job.timestamps);
+      } catch (supadataError) {
+        // Provide a clearer error than the raw Supadata message
+        throw new Error(`Could not fetch transcript for this video. The URL may be invalid or the video may be unavailable. (${supadataError.message})`);
+      }
 
       // Get video title
       let title = job.videoId;
