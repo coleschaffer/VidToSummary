@@ -130,28 +130,14 @@ function renderSavedPrompts() {
   const prompts = getSavedPrompts();
 
   container.innerHTML = prompts.map(p => `
-    <div class="saved-prompt-btn" data-id="${p.id}" data-prompt="${p.prompt.replace(/"/g, '&quot;')}" title="${p.prompt.substring(0, 100)}...">
+    <div class="saved-prompt-btn" data-id="${p.id}" data-prompt="${p.prompt.replace(/"/g, '&quot;')}" title="Double-click to edit">
       <span class="prompt-name">${p.name}</span>
-      <span class="prompt-actions">
-        <span class="prompt-action-btn edit" onclick="editSavedPrompt('${p.id}'); event.stopPropagation();" title="Rename">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
-          </svg>
-        </span>
-        <span class="prompt-action-btn delete" onclick="deleteSavedPrompt('${p.id}'); event.stopPropagation();" title="Delete">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-          </svg>
-        </span>
-      </span>
     </div>
   `).join('');
 
-  // Add click listeners for saved prompts
+  // Add click and double-click listeners for saved prompts
   container.querySelectorAll('.saved-prompt-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      if (e.target.closest('.prompt-actions')) return;
-
       // Remove active from all preset and saved buttons
       document.querySelectorAll('.preset-btn, .saved-prompt-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
@@ -166,25 +152,77 @@ function renderSavedPrompts() {
         promptInput.placeholder = 'Your prompt goes here...';
       }
     });
+
+    btn.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      openPromptEditModal(btn.dataset.id);
+    });
   });
 }
 
-window.editSavedPrompt = function(id) {
+// Prompt edit modal
+const promptEditModalHTML = `
+<div id="promptEditModal" class="modal-overlay" style="display: none;">
+  <div class="modal-content" style="max-width: 360px;">
+    <div class="modal-header">
+      <h3>Edit Prompt</h3>
+      <button class="modal-close" onclick="closePromptEditModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="time-input-group" style="width: 100%;">
+        <label>Name</label>
+        <input type="text" id="promptEditName" style="width: 100%; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.875rem; font-family: inherit;">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="promptEditDelete" style="margin-right: auto; color: var(--error);">Delete</button>
+      <button class="btn-secondary" onclick="closePromptEditModal()">Cancel</button>
+      <button class="btn-primary" id="promptEditSave">Save</button>
+    </div>
+  </div>
+</div>
+`;
+document.body.insertAdjacentHTML('beforeend', promptEditModalHTML);
+
+let promptEditId = null;
+
+function openPromptEditModal(id) {
   const prompts = getSavedPrompts();
   const prompt = prompts.find(p => p.id === id);
   if (!prompt) return;
 
-  const newName = window.prompt('Rename prompt:', prompt.name);
-  if (newName && newName.trim()) {
-    renamePrompt(id, newName.trim());
-  }
+  promptEditId = id;
+  document.getElementById('promptEditName').value = prompt.name;
+  document.getElementById('promptEditModal').style.display = 'flex';
+  document.getElementById('promptEditName').focus();
+}
+
+window.closePromptEditModal = function() {
+  document.getElementById('promptEditModal').style.display = 'none';
+  promptEditId = null;
 };
 
-window.deleteSavedPrompt = function(id) {
-  if (confirm('Delete this saved prompt?')) {
-    deletePrompt(id);
+document.getElementById('promptEditSave').addEventListener('click', () => {
+  if (!promptEditId) return;
+  const newName = document.getElementById('promptEditName').value.trim();
+  if (newName) {
+    renamePrompt(promptEditId, newName);
   }
-};
+  closePromptEditModal();
+});
+
+document.getElementById('promptEditDelete').addEventListener('click', () => {
+  if (!promptEditId) return;
+  deletePrompt(promptEditId);
+  if (activePromptId === promptEditId) activePromptId = null;
+  closePromptEditModal();
+});
+
+document.getElementById('promptEditName').addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    document.getElementById('promptEditSave').click();
+  }
+});
 
 // Track currently active saved prompt ID (for updating on run)
 let activePromptId = null;
