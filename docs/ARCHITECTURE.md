@@ -1,138 +1,99 @@
-# Video Transcriber Architecture
+# Architecture
 
 ## Overview
 
-Video Transcriber is a web application that allows users to upload videos, transcribe them using AssemblyAI, and run AI prompts on the transcriptions using Claude.
+Video Transcriber is a single Node.js/Express service with a browser frontend. It supports:
 
-## System Architecture
+- File upload transcription (audio extracted in-browser when possible).
+- YouTube transcript retrieval through Supadata with live-stream fallback.
+- Meta Ads transcript extraction through yt-dlp + AssemblyAI.
+- Prompt-based summarization through Anthropic Claude.
+- Optional PostgreSQL persistence for admin analytics/history.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client (Browser)                         │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │  FFmpeg.wasm │  │  LocalStorage│  │  UI Components          │  │
-│  │  (Audio      │  │  (History)   │  │  - Upload Queue         │  │
-│  │   Extraction)│  │              │  │  - Transcriptions       │  │
-│  └─────────────┘  └─────────────┘  │  - Summaries             │  │
-│                                     │  - History Sidebar       │  │
-│                                     └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Express.js Server                           │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  Rate Limiter   │  │  Queue Manager  │  │  Job Tracker    │  │
-│  │  - Global limit │  │  - Per-user     │  │  - Active jobs  │  │
-│  │  - Per-user     │  │    queue limit  │  │  - Auto cleanup │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-│                                                                  │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  Multer         │  │  Admin Routes   │  │  API Routes     │  │
-│  │  (File Upload)  │  │  (Dashboard)    │  │  (Transcribe)   │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   AssemblyAI    │  │   Anthropic     │  │   PostgreSQL    │
-│   (Transcribe)  │  │   (Claude)      │  │   (Optional)    │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
-```
+## Runtime Components
 
-## Data Flow
+### Browser (`public/index.html`, `public/script.js`, `public/styles.css`)
 
-### Video Upload & Transcription
+- Manages upload queue, polling, history, saved prompts, summaries, and downloads.
+- Uses local FFmpeg WASM (`public/ffmpeg/*`) for client-side audio extraction and clip creation.
+- Uses localStorage keys:
+  - `vt_settings`
+  - `vt_history`
+  - `vt_saved_prompts`
 
-1. User drops video file(s) in the upload zone
-2. FFmpeg.wasm extracts audio from video (reduces file size ~90%)
-3. Audio file is uploaded to the server
-4. Server uploads audio to AssemblyAI
-5. Server polls AssemblyAI for transcription status
-6. Client polls server for progress updates
-7. Completed transcription is returned to client
-8. Transcription is saved to localStorage history
+### Express API (`server.js`)
 
-### Prompt Processing
+- Serves static frontend and admin pages.
+- Handles auth cookie checks for admin routes.
+- Manages async transcription and download jobs in memory.
+- Integrates with external providers:
+  - AssemblyAI (transcription)
+  - Anthropic (summaries and optional translation)
+  - Supadata (YouTube transcript source)
+  - yt-dlp/ffmpeg (video fetch and live stream capture)
 
-1. User selects a prompt preset or writes custom prompt
-2. Client sends transcription + prompt to server for each video
-3. Server calls Claude API with the prompt
-4. Results are returned and displayed
-5. Summaries are saved to localStorage history
+### Queue Layer (`lib/queue.js`)
 
-## Rate Limiting & Queue Management
+- Enforces per-session and global concurrency/queue limits.
+- Tracks queued/processing/completed jobs.
+- Cleans old jobs and stale upload files on intervals.
 
-### Global Limits
-- **MAX_GLOBAL_CONCURRENT**: Maximum videos processing across all users (default: 10)
-- Prevents server overload from too many simultaneous transcriptions
+### Optional Database (`db.js`)
 
-### Per-User Limits
-- **MAX_USER_QUEUE**: Maximum videos in a single user's queue (default: 10)
-- **MAX_USER_CONCURRENT**: Maximum videos processing per user (default: 3)
-- Users identified by session ID (cookie-based)
+- Initializes tables (`videos`, `transcripts`, `summaries`) if `DATABASE_URL` exists.
+- App remains functional without DB; persistence/admin data becomes best-effort in-memory behavior.
 
-### Job Cleanup
-- **JOB_RETENTION_TIME**: How long completed jobs are kept (default: 10 minutes)
-- **UPLOAD_CLEANUP_INTERVAL**: How often to clean orphaned uploads (default: 5 minutes)
-- Automatic cleanup prevents disk space issues
+## In-Memory Job Stores
 
-## File Structure
+`server.js` uses maps for async lifecycle state:
 
-```
-/
-├── server.js           # Express server, API routes
-├── db.js               # PostgreSQL operations (optional)
-├── lib/
-│   └── queue.js        # Queue management & rate limiting
-├── public/
-│   ├── index.html      # Main app HTML
-│   ├── script.js       # Client-side JavaScript
-│   ├── styles.css      # Styling
-│   ├── admin.html      # Admin dashboard
-│   └── ffmpeg/         # Self-hosted FFmpeg.wasm files
-├── uploads/            # Temporary file storage (auto-cleaned)
-└── docs/               # Documentation
-```
+- `activeTranscriptions`: file upload transcriptions.
+- `liveTranscriptionJobs`: live YouTube jobs.
+- `videoDownloadJobs`: YouTube/Meta Ads download jobs.
 
-## Environment Variables
+All have TTL-like cleanup logic using intervals and delayed removal.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | 3000 |
-| `ASSEMBLYAI_API_KEY` | AssemblyAI API key | Required |
-| `ANTHROPIC_API_KEY` | Anthropic API key | Required |
-| `ADMIN_PASSWORD` | Admin dashboard password | 2323 |
-| `DATABASE_URL` | PostgreSQL connection string | Optional |
-| `MAX_GLOBAL_CONCURRENT` | Global concurrent limit | 10 |
-| `MAX_USER_CONCURRENT` | Per-user concurrent limit | 3 |
-| `MAX_USER_QUEUE` | Per-user queue limit | 10 |
+## Main Data Flows
 
-## Client-Side Storage
+### 1) File Upload Transcription
 
-### localStorage Keys
+1. Browser queues file(s).
+2. Browser may convert video to MP3 via FFmpeg WASM.
+3. `POST /api/transcribe/start` stores upload and creates job.
+4. Server uploads media to AssemblyAI and polls status.
+5. Browser polls `GET /api/transcribe/status/:jobId`.
+6. Completed transcript appears in UI and local history.
 
-- `vt_history`: Array of past sessions with transcriptions and summaries
-- `vt_session_id`: Unique session identifier for rate limiting
+### 2) YouTube Transcript Flow
 
-### History Structure
+1. Browser calls `POST /api/youtube/transcript` with URL.
+2. Server normalizes URL and queries Supadata pipeline.
+3. If non-English transcript, server can translate to English via Claude.
+4. For likely live streams, server returns `useAsyncJob`.
+5. Browser starts async live pipeline and polls `/api/youtube/live-transcript-status/:jobId`.
 
-```javascript
-{
-  sessions: [
-    {
-      id: "session_123",
-      date: "2024-01-30T12:00:00Z",
-      videos: [
-        { filename: "video.mp4", transcription: "..." }
-      ],
-      summaries: [
-        { filename: "video.mp4", prompt: "...", summary: "..." }
-      ]
-    }
-  ]
-}
-```
+### 3) Meta Ads Transcript Flow
+
+1. Browser sends ad library URL to `POST /api/metaads/transcript`.
+2. Server extracts ad ID and downloads video via yt-dlp + proxy.
+3. Server transcribes audio via AssemblyAI.
+4. Transcript is returned to browser for normal downstream summary flow.
+
+### 4) Summarization
+
+1. Browser sends transcript and prompt to `POST /api/summarize`.
+2. Server calls Claude Opus 4.5.
+3. Markdown summary returns to browser and can be persisted to DB when video IDs are provided.
+
+## Security and Isolation Notes
+
+- Admin authentication uses a cookie equal to `ADMIN_PASSWORD`.
+- SharedArrayBuffer headers (COOP/COEP) are enabled globally for FFmpeg WASM.
+- Queue limits are session-cookie based (`vt_session`).
+- Uploaded files and temp downloads are periodically cleaned up.
+
+## Failure Model
+
+- Missing external keys or providers generally fail per-request with explicit errors.
+- Missing PostgreSQL does not crash startup; persistence endpoints degrade gracefully.
+- Long-running jobs expose status polling and timeout behavior in frontend logic.

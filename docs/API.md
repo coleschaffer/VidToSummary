@@ -1,369 +1,122 @@
-# Video Transcriber API Documentation
+# API Reference
 
-## Base URL
+Base URL:
 
-```
-http://localhost:3000  (development)
-https://your-app.up.railway.app  (production)
-```
+- Local: `http://localhost:3000`
+- Railway: your generated Railway domain
 
-## Authentication
+## Auth Model
 
-Most endpoints are public. Admin endpoints require authentication via the `admin_auth` cookie.
-
----
+- Public endpoints: no auth required.
+- Admin endpoints: require `admin_auth` cookie set by `/api/admin/login`.
 
 ## Public Endpoints
 
-### Upload & Transcribe
+### Queue and Transcription
 
-#### `POST /api/transcribe/start`
+- `GET /api/queue/status`
+  - Returns global and current-session queue stats and configured limits.
 
-Start a new transcription job. Returns immediately with a job ID for polling.
+- `POST /api/transcribe/start`
+  - Multipart upload endpoint (`video` field).
+  - Returns `{ jobId, videoId, filename }` quickly; processing continues async.
+  - Optional form field: `timestamps=true|false`.
 
-**Request:**
-- Content-Type: `multipart/form-data`
-- Body: `video` - Video or audio file (MP4, WebM, MOV, MP3, WAV, M4A)
-- Max file size: 1GB
+- `GET /api/transcribe/status/:jobId`
+  - Poll transcription status.
+  - Response includes `status`, `stage`, `progress` and final transcript on completion.
 
-**Response:**
-```json
-{
-  "jobId": "job_1706630400000_abc123def",
-  "videoId": 1,
-  "filename": "lecture.mp4"
-}
-```
+- `POST /api/transcribe` (legacy synchronous)
+  - Multipart upload (`video` field).
+  - Blocks until transcription result/error.
 
-**Error Responses:**
-- `400` - No video file uploaded
-- `429` - Queue limit reached (too many jobs)
-- `500` - Server error
+### Summaries
 
----
+- `POST /api/summarize`
+  - Body: `{ transcription, prompt, videoIds? }`
+  - Returns `{ summary }`.
 
-#### `GET /api/transcribe/status/:jobId`
+### YouTube Transcript and Downloads
 
-Poll for transcription status.
+- `POST /api/youtube/transcript`
+  - Body: `{ url, timestamps? }`
+  - Regular videos return transcript payload.
+  - Live or suspected-live may return `{ isLive: true, useAsyncJob: true, ... }`.
 
-**Response (Processing):**
-```json
-{
-  "jobId": "job_1706630400000_abc123def",
-  "filename": "lecture.mp4",
-  "videoId": 1,
-  "status": "processing",
-  "stage": "transcribing",
-  "progress": 45
-}
-```
+- `POST /api/youtube/live-transcript-start`
+  - Body: `{ url, timestamps?, duration? }` where duration is clamped to 30-600 seconds.
+  - Returns `{ jobId }`.
 
-**Response (Completed):**
-```json
-{
-  "jobId": "job_1706630400000_abc123def",
-  "filename": "lecture.mp4",
-  "videoId": 1,
-  "status": "completed",
-  "stage": "done",
-  "progress": 100,
-  "transcription": "Full transcription text..."
-}
-```
+- `GET /api/youtube/live-transcript-status/:jobId`
+  - Poll status for the live transcription job.
+  - Completion includes `result` object.
 
-**Status Values:**
-- `processing` - Job is being processed
-- `completed` - Transcription finished successfully
-- `error` - Transcription failed
+- `POST /api/youtube/download-start/:videoId`
+  - Starts async download job.
+  - Body accepts `{ isLive?, duration? }`.
+  - Returns `{ jobId }`.
 
-**Stage Values:**
-- `uploading` - Uploading to AssemblyAI
-- `queued` - Waiting in AssemblyAI queue
-- `transcribing` - Being transcribed
-- `done` - Finished
+- `GET /api/youtube/download-status/:jobId`
+  - Polls download state (`processing`, `ready`, `failed`).
 
-**Error Response:**
-- `404` - Job not found
+- `GET /api/youtube/download-file/:jobId`
+  - Streams ready MP4, then cleans temp file and removes job.
 
----
+- `GET /api/youtube/download/:videoId` (legacy direct download)
+  - Immediate one-shot download flow, kept for compatibility.
 
-#### `POST /api/transcribe` (Legacy)
+### Meta Ads Transcript and Downloads
 
-Synchronous transcription endpoint. Blocks until complete.
+- `POST /api/metaads/transcript`
+  - Body: `{ url, timestamps? }`.
+  - Expects Facebook Ad Library URL containing `id=<digits>`.
 
-**Request:**
-- Content-Type: `multipart/form-data`
-- Body: `video` - Video or audio file
+- `POST /api/metaads/download-start/:adId`
+  - Starts async download job for Meta ad video.
 
-**Response:**
-```json
-{
-  "filename": "lecture.mp4",
-  "transcription": "Full transcription text...",
-  "videoId": 1
-}
-```
+- `GET /api/metaads/download-status/:jobId`
+  - Poll status for Meta ad download job.
 
----
-
-### Summarization
-
-#### `POST /api/summarize`
-
-Run a prompt on transcription(s) using Claude.
-
-**Request:**
-```json
-{
-  "transcription": "Combined transcription text...",
-  "prompt": "Summarize this lesson for students...",
-  "videoIds": [1, 2, 3]
-}
-```
-
-**Response:**
-```json
-{
-  "summary": "## Summary\n\nThe lesson covered..."
-}
-```
-
-**Error Responses:**
-- `400` - Missing transcription or prompt
-- `500` - Claude API error
-
----
-
-### Queue Status
-
-#### `GET /api/queue/status`
-
-Get current queue status for the session.
-
-**Response:**
-```json
-{
-  "global": {
-    "totalJobs": 5,
-    "processingJobs": 3,
-    "maxGlobalConcurrent": 10,
-    "maxUserConcurrent": 3,
-    "maxUserQueue": 10
-  },
-  "user": {
-    "totalJobs": 2,
-    "processingJobs": 1,
-    "queuedJobs": 1,
-    "canAddMore": true,
-    "canStartProcessing": true
-  },
-  "limits": {
-    "maxGlobalConcurrent": 10,
-    "maxUserConcurrent": 3,
-    "maxUserQueue": 10
-  }
-}
-```
-
----
+- `GET /api/metaads/download-file/:jobId`
+  - Streams finished Meta ad MP4 and cleans up job resources.
 
 ## Admin Endpoints
 
-All admin endpoints require authentication.
+### Auth
 
-### Authentication
+- `POST /api/admin/login`
+  - Body: `{ password }`
+  - Sets `admin_auth` cookie when password matches.
 
-#### `POST /api/admin/login`
+- `POST /api/admin/logout`
+  - Clears `admin_auth` cookie.
 
-Login to admin dashboard.
-
-**Request:**
-```json
-{
-  "password": "your-admin-password"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true
-}
-```
-
-Sets `admin_auth` cookie on success.
-
----
-
-#### `POST /api/admin/logout`
-
-Logout from admin dashboard.
-
-**Response:**
-```json
-{
-  "success": true
-}
-```
-
----
-
-#### `GET /api/admin/check`
-
-Check authentication status.
-
-**Response:**
-```json
-{
-  "authenticated": true
-}
-```
-
----
+- `GET /api/admin/check`
+  - Returns `{ authenticated: boolean }`.
 
 ### Admin Data
 
-#### `GET /api/admin/stats`
+- `GET /api/admin/stats`
+  - Returns DB totals plus queue stats.
 
-Get system statistics.
+- `GET /api/admin/videos`
+  - Returns videos and associated transcript rows.
 
-**Response:**
-```json
-{
-  "totalVideos": 150,
-  "totalTranscripts": 145,
-  "totalSummaries": 89,
-  "queue": {
-    "totalJobs": 5,
-    "processingJobs": 3,
-    "maxGlobalConcurrent": 10,
-    "maxUserConcurrent": 3,
-    "maxUserQueue": 10
-  }
-}
-```
+- `GET /api/admin/summaries`
+  - Returns stored summaries sorted newest first.
 
----
+- `GET /api/admin/transcript/:videoId/download`
+  - Downloads plain text transcript for a video ID.
 
-#### `GET /api/admin/videos`
+### Admin Page
 
-Get all videos with transcripts.
+- `GET /admin`
+  - Serves `public/admin.html`.
 
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "filename": "lecture.mp4",
-    "size": 52428800,
-    "mimeType": "video/mp4",
-    "createdAt": "2024-01-30T12:00:00Z",
-    "transcript": "Full transcription..."
-  }
-]
-```
+## Common Error Conditions
 
----
-
-#### `GET /api/admin/summaries`
-
-Get all summaries.
-
-**Response:**
-```json
-[
-  {
-    "id": 1,
-    "prompt": "Summarize this lesson...",
-    "summary": "## Summary...",
-    "videoIds": [1, 2],
-    "createdAt": "2024-01-30T12:30:00Z"
-  }
-]
-```
-
----
-
-#### `GET /api/admin/transcript/:videoId/download`
-
-Download transcript as text file.
-
-**Response:**
-- Content-Type: `text/plain`
-- Content-Disposition: `attachment; filename="transcript-1.txt"`
-
----
-
-## Rate Limiting
-
-### Session Tracking
-
-Users are identified by a session cookie (`vt_session`). If no cookie exists, one is created automatically.
-
-### Limits
-
-| Limit | Default | Description |
-|-------|---------|-------------|
-| Global Concurrent | 10 | Max jobs processing across all users |
-| User Concurrent | 3 | Max jobs processing per user |
-| User Queue | 10 | Max jobs in queue per user |
-
-### Rate Limit Response
-
-When limits are exceeded:
-
-```json
-{
-  "error": "Queue limit reached",
-  "message": "You can only have 10 videos in your queue at a time. Please wait for some to complete.",
-  "limits": {
-    "totalJobs": 10,
-    "processingJobs": 3,
-    "queuedJobs": 7,
-    "canAddMore": false,
-    "canStartProcessing": true
-  }
-}
-```
-
----
-
-## Error Handling
-
-All error responses follow this format:
-
-```json
-{
-  "error": "Error message"
-}
-```
-
-### Common HTTP Status Codes
-
-| Code | Meaning |
-|------|---------|
-| 200 | Success |
-| 400 | Bad request (missing/invalid parameters) |
-| 401 | Unauthorized (admin endpoints) |
-| 404 | Not found |
-| 429 | Rate limited |
-| 500 | Server error |
-
----
-
-## CORS Headers
-
-The server sets these headers for FFmpeg.wasm compatibility:
-
-```
-Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: require-corp
-```
-
----
-
-## File Size Limits
-
-- **Upload limit:** 1GB (1,073,741,824 bytes)
-- **JSON body limit:** 50MB
-- **Recommended:** Extract audio client-side using FFmpeg.wasm to reduce upload size by ~90%
+- `400`: invalid URL, missing params, invalid IDs, or file missing.
+- `401`: admin auth failure.
+- `404`: job or artifact not found.
+- `429`: per-user queue limit exceeded.
+- `500`: external API/tooling failures or missing server config.
