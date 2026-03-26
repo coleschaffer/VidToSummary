@@ -1171,7 +1171,15 @@ async function downloadMetaAdVideo(adId) {
   const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.facebook.com/ads/library/?id=${adId}"`;
 
   console.log(`[API] Running yt-dlp for Meta Ad ${adId}...`);
-  await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 min timeout
+  try {
+    await execAsync(ytdlpCmd, { timeout: 300000 }); // 5 min timeout
+  } catch (err) {
+    const stderr = err.stderr || err.message || '';
+    if (stderr.includes('Unable to extract ad') || stderr.includes('Unsupported URL')) {
+      throw new Error(`Could not extract video from Meta Ad ${adId}. This ad may not contain a video, may have been removed, or Facebook may have changed their page format. Try updating yt-dlp.`);
+    }
+    throw new Error(`Failed to download Meta Ad ${adId}: ${stderr.split('\n').filter(l => l.includes('ERROR')).join('; ') || stderr.substring(0, 200)}`);
+  }
   return tempFile;
 }
 
@@ -1494,7 +1502,15 @@ app.post('/api/metaads/download-start/:adId', async (req, res) => {
       const ytdlpCmd = `yt-dlp --proxy "${proxyUrl}" -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${tempFile}" --no-playlist --no-check-certificates "https://www.facebook.com/ads/library/?id=${adId}"`;
 
       const startTime = Date.now();
-      await execAsync(ytdlpCmd, { timeout: 300000 });
+      try {
+        await execAsync(ytdlpCmd, { timeout: 300000 });
+      } catch (dlErr) {
+        const stderr = dlErr.stderr || dlErr.message || '';
+        if (stderr.includes('Unable to extract ad') || stderr.includes('Unsupported URL')) {
+          throw new Error(`Could not extract video from Meta Ad ${adId}. This ad may not contain a video, may have been removed, or Facebook may have changed their page format.`);
+        }
+        throw new Error(`Failed to download Meta Ad ${adId}: ${stderr.split('\n').filter(l => l.includes('ERROR')).join('; ') || stderr.substring(0, 200)}`);
+      }
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       console.log(`[API] [${jobId}] yt-dlp completed in ${elapsed}s`);
