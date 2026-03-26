@@ -652,25 +652,42 @@ async function fetchMetaAdsTranscripts() {
 
   for (const url of urls) {
     try {
-      const response = await fetch('/api/metaads/transcript', {
+      // Start the job
+      const startResponse = await fetch('/api/metaads/transcript', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, timestamps: getSettings().timestamps })
       });
 
-      if (!response.ok) {
-        let errorMsg = 'Failed to fetch transcript';
-        const contentType = response.headers.get('content-type') || '';
+      if (!startResponse.ok) {
+        let errorMsg = 'Failed to start transcript job';
+        const contentType = startResponse.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
-          const error = await response.json();
-          errorMsg = error.suggestion ? `${error.error}\n\n${error.suggestion}` : (error.error || errorMsg);
-        } else {
-          errorMsg = response.status === 502 ? 'Server timed out downloading the ad video. The ad may be too large or unavailable.' : `Server error (${response.status})`;
+          const error = await startResponse.json();
+          errorMsg = error.error || errorMsg;
         }
         throw new Error(errorMsg);
       }
 
-      const data = await response.json();
+      const { jobId } = await startResponse.json();
+
+      // Poll for completion
+      let data;
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000));
+        const pollResponse = await fetch(`/api/metaads/transcript-status/${jobId}`);
+        const pollData = await pollResponse.json();
+
+        if (pollData.status === 'completed') {
+          data = pollData;
+          break;
+        }
+        if (pollData.status === 'error') {
+          throw new Error(pollData.error || 'Transcript failed');
+        }
+        // Still processing — update button text with step
+        fetchMetaAdsBtn.innerHTML = `<span class="spinner"></span> ${pollData.step === 'transcribing' ? 'Transcribing' : 'Downloading'}...`;
+      }
 
       // Use ad title, truncated if needed
       const displayTitle = truncateTitle(data.title || data.adId);

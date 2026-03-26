@@ -1198,7 +1198,20 @@ async function getMetaAdTitle(adId) {
   }
 }
 
-// Meta Ads transcript endpoint
+// Meta Ads transcript job queue (in-memory)
+const metaAdTranscriptJobs = new Map();
+
+// Clean up old transcript jobs every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of metaAdTranscriptJobs) {
+    if (now - job.createdAt > 30 * 60 * 1000) {
+      metaAdTranscriptJobs.delete(jobId);
+    }
+  }
+}, 10 * 60 * 1000);
+
+// Start Meta Ads transcript job - returns immediately with job ID
 app.post('/api/metaads/transcript', async (req, res) => {
   const { url, timestamps } = req.body;
 
@@ -1222,67 +1235,110 @@ app.post('/api/metaads/transcript', async (req, res) => {
     return res.status(500).json({ error: 'Proxy not configured for Meta Ads downloads' });
   }
 
-  let tempFile = null;
+  const jobId = `transcript_metaad_${adId}_${Date.now()}`;
+  metaAdTranscriptJobs.set(jobId, {
+    status: 'processing',
+    step: 'downloading',
+    adId,
+    timestamps,
+    createdAt: Date.now(),
+    result: null,
+    error: null
+  });
 
-  try {
-    // 1. Download video using yt-dlp
-    console.log(`[API] Downloading Meta Ad video: ${adId}`);
-    tempFile = await downloadMetaAdVideo(adId);
+  // Return job ID immediately
+  res.json({ jobId });
 
-    if (!existsSync(tempFile)) {
-      throw new Error('Download completed but file not found');
-    }
+  // Process in background
+  (async () => {
+    const job = metaAdTranscriptJobs.get(jobId);
+    let tempFile = null;
 
-    // 2. Get ad title
-    const title = await getMetaAdTitle(adId);
-    console.log(`[API] Meta Ad title: ${title}`);
+    try {
+      // 1. Download video using yt-dlp
+      console.log(`[API] [${jobId}] Downloading Meta Ad video: ${adId}`);
+      tempFile = await downloadMetaAdVideo(adId);
 
-    // 3. Upload to AssemblyAI and transcribe
-    console.log(`[API] Uploading to AssemblyAI...`);
-    const uploadUrl = await assemblyai.files.upload(tempFile);
-    console.log(`[API] Upload complete, submitting transcription...`);
-
-    const transcriptRequest = await assemblyai.transcripts.submit({ audio_url: uploadUrl });
-
-    // 4. Poll for completion
-    let transcript;
-    let pollCount = 0;
-    while (true) {
-      transcript = await assemblyai.transcripts.get(transcriptRequest.id);
-      pollCount++;
-
-      if (transcript.status === 'completed') {
-        console.log(`[API] Transcription complete after ${pollCount} polls`);
-        break;
-      }
-      if (transcript.status === 'error') {
-        throw new Error(transcript.error || 'Transcription failed');
+      if (!existsSync(tempFile)) {
+        throw new Error('Download completed but file not found');
       }
 
-      console.log(`[API] Transcription status: ${transcript.status} (poll ${pollCount})`);
-      await new Promise(r => setTimeout(r, 3000));
+      // 2. Get ad title
+      job.step = 'getting title';
+      const title = await getMetaAdTitle(adId);
+      console.log(`[API] [${jobId}] Meta Ad title: ${title}`);
+
+      // 3. Upload to AssemblyAI and transcribe
+      job.step = 'transcribing';
+      console.log(`[API] [${jobId}] Uploading to AssemblyAI...`);
+      const uploadUrl = await assemblyai.files.upload(tempFile);
+
+      // Clean up temp file after upload
+      try { unlinkSync(tempFile); tempFile = null; } catch {}
+
+      console.log(`[API] [${jobId}] Upload complete, submitting transcription...`);
+      const transcriptRequest = await assemblyai.transcripts.submit({ audio_url: uploadUrl });
+
+      // 4. Poll for completion
+      let transcript;
+      let pollCount = 0;
+      while (true) {
+        transcript = await assemblyai.transcripts.get(transcriptRequest.id);
+        pollCount++;
+
+        if (transcript.status === 'completed') {
+          console.log(`[API] [${jobId}] Transcription complete after ${pollCount} polls`);
+          break;
+        }
+        if (transcript.status === 'error') {
+          throw new Error(transcript.error || 'Transcription failed');
+        }
+
+        console.log(`[API] [${jobId}] Transcription status: ${transcript.status} (poll ${pollCount})`);
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      // 5. Return result
+      const transcriptText = timestamps ? buildTimestampedTranscript(transcript.words) : transcript.text;
+      job.status = 'completed';
+      job.result = {
+        transcript: transcriptText,
+        adId: adId,
+        title: title,
+        source: 'metaads'
+      };
+
+    } catch (error) {
+      console.error(`[API] [${jobId}] Meta Ads transcript error:`, error);
+      if (tempFile) {
+        try { unlinkSync(tempFile); } catch {}
+      }
+      job.status = 'error';
+      job.error = error.message;
     }
+  })();
+});
 
-    // 5. Clean up temp file
-    try { unlinkSync(tempFile); } catch {}
-
-    // 6. Return result (same format as YouTube)
-    const transcriptText = timestamps ? buildTimestampedTranscript(transcript.words) : transcript.text;
-    res.json({
-      transcript: transcriptText,
-      adId: adId,
-      title: title,
-      source: 'metaads'
-    });
-
-  } catch (error) {
-    console.error('[API] Meta Ads transcript error:', error);
-    // Clean up temp file on error
-    if (tempFile) {
-      try { unlinkSync(tempFile); } catch {}
-    }
-    res.status(500).json({ error: error.message });
+// Poll Meta Ads transcript job status
+app.get('/api/metaads/transcript-status/:jobId', (req, res) => {
+  const job = metaAdTranscriptJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
   }
+
+  if (job.status === 'completed') {
+    const result = job.result;
+    metaAdTranscriptJobs.delete(req.params.jobId);
+    return res.json({ status: 'completed', ...result });
+  }
+
+  if (job.status === 'error') {
+    const error = job.error;
+    metaAdTranscriptJobs.delete(req.params.jobId);
+    return res.json({ status: 'error', error });
+  }
+
+  res.json({ status: 'processing', step: job.step });
 });
 
 // Video download job queue (in-memory)
