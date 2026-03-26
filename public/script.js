@@ -659,9 +659,15 @@ async function fetchMetaAdsTranscripts() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        const errorMsg = error.suggestion ? `${error.error}\n\n${error.suggestion}` : error.error;
-        throw new Error(errorMsg || 'Failed to fetch transcript');
+        let errorMsg = 'Failed to fetch transcript';
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const error = await response.json();
+          errorMsg = error.suggestion ? `${error.error}\n\n${error.suggestion}` : (error.error || errorMsg);
+        } else {
+          errorMsg = response.status === 502 ? 'Server timed out downloading the ad video. The ad may be too large or unavailable.' : `Server error (${response.status})`;
+        }
+        throw new Error(errorMsg);
       }
 
       const data = await response.json();
